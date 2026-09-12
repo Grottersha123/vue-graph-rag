@@ -1,0 +1,4 @@
+id,name,description
+downloaded,downloaded,Документ успешно скачан
+error,error,Документ не удалось скачать
+manual_pending,manual_pending,Требуется ручная обработка
