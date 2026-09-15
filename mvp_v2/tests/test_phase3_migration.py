@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,19 +10,12 @@ from pydantic import ValidationError
 
 from mvp_v2.adapters.csv.snapshot import read_snapshot
 from mvp_v2.adapters.filesystem.dumps import (
-    DumpPublicationError,
     FilesystemDumpRepository,
 )
-from mvp_v2.adapters.filesystem.media import (
-    FilesystemMediaAuthority,
-    FilesystemMediaResolver,
-)
+from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.adapters.legacy import CsvLegacyImporter
 from mvp_v2.adapters.legacy.reader import EXPECTED_HEADERS
-from mvp_v2.application.dto.importing import (
-    LegacyImportResult,
-    MediaCopyPlan,
-)
+from mvp_v2.application.dto.importing import LegacyImportResult
 from mvp_v2.application.services.migration import (
     LegacyMigrationService,
     MigrationApprovalError,
@@ -132,7 +124,8 @@ def test_preview_maps_graph_and_is_deterministic(tmp_path: Path) -> None:
     assert first.snapshot.assets[0].local_path == "images/image.png"
     assert not first.snapshot.chunks and not first.snapshot.embeddings
     assert first.report.documents_without_process == ("doc-1",)
-    assert first.copy_plan.total_files == 3
+    assert first.report.source_file_count == 3
+    assert first.report.source_file_bytes == len(b"documentimageupload")
 
 
 def test_version_gaps_preserve_numbers_and_use_immediate_imported_predecessor(
@@ -227,45 +220,6 @@ def test_preview_collects_blocking_scalar_and_header_errors(tmp_path: Path) -> N
     assert "MALFORMED_ROW" in codes
 
 
-def test_media_copy_verifies_and_rolls_back(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    _legacy_tree(source)
-    result = CsvLegacyImporter().preview(source)
-    authority = tmp_path / "authority"
-    resolver = FilesystemMediaAuthority().copy(
-        source_root=source, destination=authority, plan=result.copy_plan
-    )
-    asset = result.snapshot.assets[0]
-    assert resolver.verify(asset.local_path, asset.sha256).status == "verified"
-    with pytest.raises(MediaVerificationError):
-        FilesystemMediaAuthority().copy(
-            source_root=source, destination=authority, plan=result.copy_plan
-        )
-    assert not tuple(tmp_path.glob(".authority-copy-*"))
-
-
-def test_media_copy_changed_source_rolls_back_and_can_retry(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    _legacy_tree(source)
-    result = CsvLegacyImporter().preview(source)
-    image = source / "images/image.png"
-    image.write_bytes(b"changed-after-preview")
-    destination = tmp_path / "authority"
-    with pytest.raises(MediaVerificationError):
-        FilesystemMediaAuthority().copy(
-            source_root=source, destination=destination, plan=result.copy_plan
-        )
-    assert not destination.exists()
-    assert not tuple(tmp_path.glob(".authority-copy-*"))
-    image.write_bytes(b"image")
-    FilesystemMediaAuthority().copy(
-        source_root=source, destination=destination, plan=result.copy_plan
-    )
-    assert (destination / "images/image.png").read_bytes() == b"image"
-
-
 def test_media_resolver_rejects_symlink_and_traversal(tmp_path: Path) -> None:
     root = tmp_path / "media"
     root.mkdir()
@@ -278,52 +232,25 @@ def test_media_resolver_rejects_symlink_and_traversal(tmp_path: Path) -> None:
         resolver.verify("link", hashlib.sha256(b"x").hexdigest())
 
 
-def test_publisher_numbers_concurrently_and_preserves_canonical_readback(
-    tmp_path: Path,
-) -> None:
-    snapshot = GraphSnapshot()
-    repository = FilesystemDumpRepository()
-    published_at = datetime(2025, 1, 1, tzinfo=UTC)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        manifests = list(
-            executor.map(
-                lambda _: repository.publish(
-                    dumps_root=tmp_path, snapshot=snapshot, published_at=published_at
-                ),
-                range(2),
-            )
-        )
-    assert sorted(item.dump_number for item in manifests) == [1, 2]
-    assert read_snapshot(tmp_path / "dump-000001") == snapshot
-    assert read_snapshot(tmp_path / "dump-000002") == snapshot
-    assert len(manifests[0].files) == 21
-
-
 def test_application_gates_approval_and_integrates_to_first_dump(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    _legacy_tree(source)
+    data_root = tmp_path / "mvp_data"
+    data_root.mkdir()
+    _legacy_tree(data_root)
     service = LegacyMigrationService(
-        importer=CsvLegacyImporter(),
-        media_authority=FilesystemMediaAuthority(),
-        dump_repository=FilesystemDumpRepository(),
+        importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
     )
-    result = service.preview(source_root=source)
+    result = service.preview(runtime_data_root=data_root)
+    resolver = FilesystemMediaResolver(data_root)
     with pytest.raises(MigrationApprovalError):
-        service.copy_media(
+        service.publish(
             result=result,
             approved_report_id="0" * 64,
-            source_root=source,
-            media_root=tmp_path / "media",
+            dumps_root=tmp_path / "dumps",
+            media_resolver=resolver,
+            published_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
-    resolver = service.copy_media(
-        result=result,
-        approved_report_id=result.report.report_id,
-        source_root=source,
-        media_root=tmp_path / "media",
-    )
     manifest = service.publish(
         result=result,
         approved_report_id=result.report.report_id,
@@ -333,6 +260,72 @@ def test_application_gates_approval_and_integrates_to_first_dump(
     )
     assert manifest.dump_number == 1
     assert read_snapshot(tmp_path / "dumps/dump-000001") == result.snapshot
+
+
+def test_publish_blocks_changed_referenced_media_but_ignores_upload(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "mvp_data"
+    data_root.mkdir()
+    _legacy_tree(data_root)
+    service = LegacyMigrationService(
+        importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
+    )
+    result = service.preview(runtime_data_root=data_root)
+    (data_root / "uploads/raw.md").write_bytes(b"changed")
+    service.publish(
+        result=result,
+        approved_report_id=result.report.report_id,
+        dumps_root=tmp_path / "dumps",
+        media_resolver=FilesystemMediaResolver(data_root),
+        published_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    (data_root / "images/image.png").write_bytes(b"changed")
+    with pytest.raises(MigrationApprovalError):
+        service.publish(
+            result=result,
+            approved_report_id=result.report.report_id,
+            dumps_root=tmp_path / "dumps",
+            media_resolver=FilesystemMediaResolver(data_root),
+            published_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+    assert not (tmp_path / "dumps/dump-000002").exists()
+
+
+def test_publish_blocks_changed_document_version_file(tmp_path: Path) -> None:
+    data_root = tmp_path / "mvp_data"
+    data_root.mkdir()
+    _legacy_tree(data_root)
+    service = LegacyMigrationService(
+        importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
+    )
+    result = service.preview(runtime_data_root=data_root)
+    (data_root / "documents/doc.md").write_bytes(b"changed")
+    dumps_root = tmp_path / "dumps"
+    with pytest.raises(
+        MigrationApprovalError,
+        match="target graph or referenced media failed publication validation",
+    ):
+        service.publish(
+            result=result,
+            approved_report_id=result.report.report_id,
+            dumps_root=dumps_root,
+            media_resolver=FilesystemMediaResolver(data_root),
+            published_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+    assert not (dumps_root / "dump-000001").exists()
+
+
+def test_dump_number_uses_highest_valid_directory_name(tmp_path: Path) -> None:
+    (tmp_path / "dump-invalid").mkdir()
+    (tmp_path / "dump-000004").mkdir()
+    manifest = FilesystemDumpRepository().publish(
+        dumps_root=tmp_path,
+        snapshot=GraphSnapshot(),
+        published_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    assert manifest.dump_number == 5
+    assert (tmp_path / "dump-000005").is_dir()
 
 
 def test_empty_sha_current_flag_has_explicit_nonblocking_rewrite(
@@ -396,39 +389,6 @@ def test_missing_or_changed_referenced_media_blocks_preview(tmp_path: Path) -> N
     )
 
 
-def test_failed_dump_validation_consumes_no_number_and_cleans_stage(
-    tmp_path: Path,
-) -> None:
-    invalid = GraphSnapshot(
-        documents=(
-            graph.Document(
-                id="doc",
-                title="title",
-                source_name="",
-                content_format="markdown",
-                source_url="",
-                external_id="",
-                is_active=False,
-            ),
-        )
-    )
-    repository = FilesystemDumpRepository()
-    with pytest.raises(DumpPublicationError):
-        repository.publish(
-            dumps_root=tmp_path,
-            snapshot=invalid,
-            published_at=datetime(2025, 1, 1, tzinfo=UTC),
-        )
-    assert not (tmp_path / "dump-000001").exists()
-    assert not tuple(tmp_path.glob(".dump-000001-*"))
-    manifest = repository.publish(
-        dumps_root=tmp_path,
-        snapshot=GraphSnapshot(),
-        published_at=datetime(2025, 1, 1, tzinfo=UTC),
-    )
-    assert manifest.dump_number == 1
-
-
 def test_result_rejects_snapshot_change_with_approved_report(tmp_path: Path) -> None:
     _legacy_tree(tmp_path)
     result = CsvLegacyImporter().preview(tmp_path)
@@ -442,59 +402,4 @@ def test_result_rejects_snapshot_change_with_approved_report(tmp_path: Path) -> 
         LegacyImportResult(
             snapshot=changed_snapshot,
             report=result.report,
-            copy_plan=result.copy_plan,
         )
-
-
-def test_result_rejects_copy_plan_change_with_same_totals(tmp_path: Path) -> None:
-    _legacy_tree(tmp_path)
-    result = CsvLegacyImporter().preview(tmp_path)
-    entries = list(result.copy_plan.entries)
-    entries[0] = entries[0].model_copy(update={"target_path": "documents/changed.md"})
-    changed_plan = MediaCopyPlan(
-        entries=tuple(entries),
-        total_files=result.copy_plan.total_files,
-        total_bytes=result.copy_plan.total_bytes,
-    )
-    with pytest.raises(ValidationError, match="exact media copy plan"):
-        LegacyImportResult(
-            snapshot=result.snapshot,
-            report=result.report,
-            copy_plan=changed_plan,
-        )
-
-
-@pytest.mark.parametrize("changed_path", ["documents/doc.md", "uploads/raw.md"])
-def test_publish_rechecks_every_copied_file_before_dump(
-    tmp_path: Path, changed_path: str
-) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    _legacy_tree(source)
-    service = LegacyMigrationService(
-        importer=CsvLegacyImporter(),
-        media_authority=FilesystemMediaAuthority(),
-        dump_repository=FilesystemDumpRepository(),
-    )
-    result = service.preview(source_root=source)
-    media_root = tmp_path / "media"
-    resolver = service.copy_media(
-        result=result,
-        approved_report_id=result.report.report_id,
-        source_root=source,
-        media_root=media_root,
-    )
-    (media_root / changed_path).write_bytes(b"changed-after-copy")
-    dumps_root = tmp_path / "dumps"
-    with pytest.raises(
-        MigrationApprovalError,
-        match="complete target media authority verification failed",
-    ):
-        service.publish(
-            result=result,
-            approved_report_id=result.report.report_id,
-            dumps_root=dumps_root,
-            media_resolver=resolver,
-            published_at=datetime(2025, 1, 1, tzinfo=UTC),
-        )
-    assert not (dumps_root / "dump-000001").exists()

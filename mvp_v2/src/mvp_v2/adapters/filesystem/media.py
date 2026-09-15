@@ -1,24 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import shutil
-import tempfile
 from pathlib import Path, PurePosixPath
 
-from mvp_v2.application.dto.importing import MediaCopyPlan
 from mvp_v2.ports.media import MediaResolver, MediaVerification, MediaVerificationError
 
 
 class FilesystemMediaResolver(MediaResolver):
-    def __init__(self, authority_root: Path) -> None:
-        self._root = authority_root
+    def __init__(self, runtime_data_root: Path) -> None:
+        self._root = runtime_data_root
 
     def verify(self, relative_path: str, expected_sha256: str) -> MediaVerification:
         try:
             path = _confined_path(self._root, relative_path)
             if not self._root.is_dir() or self._root.is_symlink():
-                raise MediaVerificationError("media authority is unavailable")
+                raise MediaVerificationError("runtime data root is unavailable")
             _reject_symlink_components(self._root, path)
             if not path.exists():
                 return MediaVerification(
@@ -40,57 +36,6 @@ class FilesystemMediaResolver(MediaResolver):
                 status="hash_mismatch", detail="media SHA-256 does not match"
             )
         return MediaVerification(status="verified")
-
-
-class FilesystemMediaAuthority:
-    """Copy a pre-hashed plan into a new authority by atomic directory rename."""
-
-    def copy(
-        self, *, source_root: Path, destination: Path, plan: MediaCopyPlan
-    ) -> FilesystemMediaResolver:
-        if destination.exists() or destination.is_symlink():
-            raise MediaVerificationError("destination authority already exists")
-        parent = destination.parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-            if parent.is_symlink() or not parent.is_dir():
-                raise MediaVerificationError("destination parent is unavailable")
-            stage = Path(
-                tempfile.mkdtemp(prefix=f".{destination.name}-copy-", dir=parent)
-            )
-        except OSError as error:
-            raise MediaVerificationError(
-                "media staging could not be created"
-            ) from error
-        published = False
-        try:
-            for entry in plan.entries:
-                source = _confined_path(source_root, entry.source_path)
-                target = _confined_path(stage, entry.target_path)
-                _reject_symlink_components(source_root, source)
-                if source.is_symlink() or not source.is_file():
-                    raise MediaVerificationError("planned source is not a regular file")
-                source_size, source_hash = _hash(source)
-                if source_size != entry.size or source_hash != entry.sha256:
-                    raise MediaVerificationError("planned source changed after preview")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _stream_copy(source, target)
-                target_size, target_hash = _hash(target)
-                if target_size != entry.size or target_hash != entry.sha256:
-                    raise MediaVerificationError("copied media verification failed")
-            try:
-                stage.rename(destination)
-            except OSError as error:
-                raise MediaVerificationError(
-                    "media authority could not be finalized"
-                ) from error
-            published = True
-            return FilesystemMediaResolver(destination)
-        except OSError as error:
-            raise MediaVerificationError("media copy operation failed") from error
-        finally:
-            if not published:
-                shutil.rmtree(stage, ignore_errors=True)
 
 
 def _confined_path(root: Path, relative: str) -> Path:
@@ -124,17 +69,3 @@ def _hash(path: Path) -> tuple[int, str]:
             digest.update(block)
             size += len(block)
     return size, digest.hexdigest()
-
-
-def _stream_copy(source: Path, target: Path) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    descriptor = os.open(target, flags, 0o644)
-    try:
-        with source.open("rb") as incoming, os.fdopen(descriptor, "wb") as outgoing:
-            descriptor = -1
-            shutil.copyfileobj(incoming, outgoing, length=1024 * 1024)
-            outgoing.flush()
-            os.fsync(outgoing.fileno())
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)

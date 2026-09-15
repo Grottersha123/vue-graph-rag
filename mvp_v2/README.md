@@ -1,47 +1,37 @@
 # MVP v2
 
-Local multimodal Graph RAG with a strict, versioned graph contract.
+Local single-user multimodal Graph RAG with a strict, versioned graph contract.
 
 - Canonical schema: [`docs/schema.md`](docs/schema.md)
 - Implementation plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
 - Package map: [`docs/module-map.md`](docs/module-map.md)
 
-## Phase 3: legacy migration
+## Local runtime workflow
 
-`CsvLegacyImporter.preview(source_root)` is read-only. It reads only the 15
-allowlisted legacy CSV files and regular files below `documents/`, `images/`, and
-`uploads/`. It returns a canonical `GraphSnapshot`, a deterministic import report,
-and a verified copy plan. It does not copy media or publish a dump.
-
-A commit is a separate application flow through `LegacyMigrationService`:
-
-1. preview and persist/review `result.report.canonical_bytes()`;
-2. pass the exact `result.report.report_id` to `copy_media`, with an operator-chosen
-   new media authority root;
-3. pass the same report ID, returned resolver, an operator-chosen dumps root, and an
-   explicit UTC timestamp to `publish`.
-
-The service refuses a blocking report, approval mismatch, failed media verification,
-or invalid publication graph. Approval binds the exact canonical graph rows and every
-ordered copy-plan entry. Immediately before dump publication, every copied document,
-image, upload, and orphan file is re-hashed through the target resolver.
-
-Media and dumps use separate operator roots, so the two publications are not one
-atomic transaction. If dump publication fails after a successful media copy, the
-new immutable media authority can remain unreferenced by any dump and may be reused
-for a corrected explicit publish. The filesystem repository publishes all 21 canonical
-CSV tables plus `manifest.json` as an immutable `dump-NNNNNN`. It uses an exclusive
-lock, same-filesystem staging, atomic rename, and file/directory `fsync`. A failed
-attempt creates no numbered dump. Preview never implies commit.
-
-Offline verification commands:
-
-```console
-/tmp/vue-graph-rag-mvp-v2/.venv/bin/ruff format --check .
-/tmp/vue-graph-rag-mvp-v2/.venv/bin/ruff check .
-/tmp/vue-graph-rag-mvp-v2/.venv/bin/mypy src tests
-/tmp/vue-graph-rag-mvp-v2/.venv/bin/pytest -q
+```text
+mvp/mvp_data/ -> mvp_v2/runtime/mvp_data/
+mvp_v2/runtime/mvp_data/ -> mvp_v2/runtime/dumps/dump-NNNNNN/
+mvp_v2/runtime/dumps/ -> mvp_v2/runtime/databases/ (later phase)
 ```
 
-The legacy `../mvp/mvp_data` tree is always a read-only input. Never read its
-`.lbdb`, `.env`, backup CSV contents, or unexpected root files.
+Populate the ignored working directory once with ordinary filesystem tooling, for
+example `cp -R mvp/mvp_data mvp_v2/runtime/mvp_data`. Review what you copy. Do not
+select or use old `.lbdb` files; MVP v2 will create its databases later.
+
+`CsvLegacyImporter.preview(runtime_data_root)` reads the existing working copy. It
+allowlists the 15 source CSV names and scans only `documents/`, `images/`, and
+`uploads/`. Other root entries are ignored. Preview returns a canonical
+`GraphSnapshot` and deterministic report. The report binds the exact snapshot,
+source CSV hashes, source file totals, source-tree digest, and diagnostics.
+
+After explicit report review, `LegacyMigrationService.publish` accepts the exact
+report ID, `FilesystemMediaResolver(runtime_data_root)`, dumps root, and UTC time.
+A blocking report, approval mismatch, invalid graph, or missing/changed graph-referenced
+DocumentVersion or Asset file blocks publication. Uploads and other orphan source
+files are not rechecked at publication.
+
+`FilesystemDumpRepository` writes 21 canonical CSV tables and `manifest.json` to a
+temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the next
+number after the highest valid six-digit dump directory and cleans its failed staging
+directory. It assumes one local Streamlit process; it has no inter-process lock.
+No preview copies data or publishes a dump.

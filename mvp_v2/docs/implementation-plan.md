@@ -29,7 +29,7 @@ Status: active implementation plan. The canonical graph contract is `docs/schema
 | `manual_links.csv` | Resolve valid document endpoints into `LINKS_TO`; unresolved rows go to the import report. |
 | `image_manifest.csv` | Use only for import diagnostics/path reconciliation; it is not a graph table. |
 | `HAS_ERROR.csv` | Drop the edge table; preserve applicable text in `DocumentVersion.error` and report losses. |
-| `documents/`, `images/`, `uploads/` | Copy into the new media/source authority during import; never mutate the originals. |
+| `documents/`, `images/`, `uploads/` | Read from the operator-populated runtime working copy; retain target paths such as `documents/...` and `images/...`. |
 | Chunks and Embeddings | They do not exist in the initial legacy graph and are built later by MVP v2. |
 | Process and DESCRIBES | Legacy data does not define them reliably. Create them through Streamlit/operator input; never infer `onboarding` from arbitrary text. |
 
@@ -41,7 +41,7 @@ Status: active implementation plan. The canonical graph contract is `docs/schema
    publication capability is implemented. The real `dump-000001` remains blocked on
    operator report approval and persistent runtime roots (TODO-DATA-001/TODO-OPS-001).
 4. Text ingestion and deterministic chunking without persisted Section nodes.
-5. Image collection ingestion, safe media copying and vision descriptions.
+5. Image collection ingestion and vision descriptions.
 6. Missing/all embedding workflows with the exact nine-field Embedding model.
 7. LadybugDB staged publication, one selected embedding identity and retrieval.
 8. Deletion preview/cascade, immediate active-DB rebuild and stale-DB blocking.
@@ -110,34 +110,21 @@ HOME. The application may execute `LOAD vector` but never `INSTALL vector`.
 
 ## Phase 3 implemented contract
 
-Preview is a non-mutating operation. The importer reads exact allowlisted CSV names,
-accumulates parse/model/edge/path/media findings instead of failing at the first bad
-row, hashes source CSV and media bytes, and returns the canonical graph separately
-from the report JSON. Report identity is the SHA-256 of canonical, sorted, nonvolatile
-facts. Expected legacy transformations and review items are warnings/information;
-unsafe paths, malformed target rows, invalid endpoints/cardinality, missing referenced
-files, hash mismatches, and graph publication errors block publication.
+The local operator populates `mvp_v2/runtime/mvp_data/` once with ordinary filesystem
+tooling. The application does not copy or police that tree. Old `.lbdb` files must
+not be selected or used. The importer reads allowlisted CSV names and scans only
+`documents/`, `images/`, and `uploads/`; unexpected root entries are ignored.
 
-Media commit copies all regular files below the three authorized legacy directories.
-It rejects symlinks and lexical escapes, stages beside the chosen destination,
-stream-copies with SHA/size verification, refuses an existing authority, and exposes
-the complete authority by rename. `FilesystemMediaResolver` confines every graph
-path and translates expected filesystem failures to bounded errors.
+Preview is read-only. It returns a canonical graph and deterministic report. Approval
+binds the exact graph snapshot, exact source CSV hashes and row counts, reported
+issues, aggregate source file facts, and source-tree digest. There is no application-managed media copy or publication step.
 
-Dump commit requires the exact approved report ID twice, a publishable report,
-successful target media validation, explicit runtime roots, and a UTC timestamp.
-Existing dumps must form a valid contiguous immutable sequence. Publication holds an
-exclusive lock, writes and rereads 21 canonical CSV tables, verifies counts/hashes,
-writes a canonical `DumpManifest`, fsyncs staged files/directories, and atomically
-renames the next six-digit directory. Report approval binds canonical digests of the
-exact graph and full ordered media copy plan. Every target copy-plan entry is verified
-again immediately before the final approval check and dump repository call.
+Publication validates the current graph and only its referenced DocumentVersion and
+Asset files through `FilesystemMediaResolver(runtime_data_root)`. It does not rehash
+uploads or orphan files. The dump writer creates all 21 CSVs plus `manifest.json` in
+a temporary sibling and renames it to the next immutable six-digit directory. It
+assumes one local Streamlit process; it does not lock across processes or
+revalidate historical dumps.
 
-Media-first and dump-second cannot be atomic across separate operator roots. A newly
-published immutable media authority can remain after a later dump failure; it is not
-visible through a dump and can be reused for a corrected explicit publication. No
-real runtime location or dump is selected by this phase.
-
-Remaining gates: TODO-DATA-001 requires operator review of the derived report;
-TODO-OPS-001 requires operator-provided persistent media and dumps roots.
-TODO-SEC-001 remains default-deny. Phase 3 makes no provider, database, or UI calls.
+No real runtime copy, dump, database, provider, or UI operation is performed by this
+phase.

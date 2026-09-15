@@ -17,7 +17,7 @@ mvp_v2/src/mvp_v2/
     manifests.py             dump and database manifests
     dto/                     embedding/search/deletion/import DTOs
     services/                orchestration by use case
-      migration.py           preview, approval, media, validation, publish gates
+      migration.py           preview, approval, validation, and dump gates
   ports/                     narrow Protocols required by application services
   adapters/
     csv/                     deterministic typed CSV codec
@@ -26,12 +26,12 @@ mvp_v2/src/mvp_v2/
       common.py              bounded scalar/path/issue helpers
       parsers.py             adapter-local legacy-to-target record mapping
       diagnostics.py         cross-check and image-manifest diagnostics
-      media_plan.py          authorized tree scan and copy-plan reconciliation
+      source_tree.py         documents/images/uploads scan and diagnostics
       reporting.py           canonical report facts, ordering, and identity
       importer.py            read-only preview composition
     filesystem/
-      media.py               confined resolver and atomic media authority copy
-      dumps.py               locked immutable numbered dump publication
+      media.py               confined resolver for graph-referenced files
+      dumps.py               single-process immutable numbered dump writer
     ollama/                  local vision, embedding and chat adapters
     ladybug/                 graph load, ANN index and retrieval
   presentation/

@@ -7,10 +7,10 @@ from typing import Literal
 
 from mvp_v2.adapters.legacy.common import LegacyTools
 from mvp_v2.adapters.legacy.diagnostics import LegacyDiagnostics
-from mvp_v2.adapters.legacy.media_plan import build_media_plan
 from mvp_v2.adapters.legacy.parsers import LegacyParser
 from mvp_v2.adapters.legacy.reader import EXPECTED_HEADERS, LegacyTable, read_table
 from mvp_v2.adapters.legacy.reporting import build_import_report
+from mvp_v2.adapters.legacy.source_tree import scan_source_tree
 from mvp_v2.application.dto.importing import ImportIssue, LegacyImportResult
 from mvp_v2.domain import graph
 from mvp_v2.domain.invariants import validate_graph
@@ -232,7 +232,9 @@ class CsvLegacyImporter(LegacyTools):
         manifest_status, manifest_reason = diagnostics._manifest_diagnostics(
             tables["image_manifest"], snapshot, issues
         )
-        copy_plan = build_media_plan(source_root, snapshot, issues)
+        source_file_count, source_file_bytes, source_tree_sha256 = scan_source_tree(
+            source_root, snapshot, issues
+        )
         for item in validate_graph(snapshot).issues:
             issues.append(
                 self._issue(
@@ -266,7 +268,9 @@ class CsvLegacyImporter(LegacyTools):
             ),
             snapshot=snapshot,
             issues=issues,
-            copy_plan=copy_plan,
+            source_file_count=source_file_count,
+            source_file_bytes=source_file_bytes,
+            source_tree_sha256=source_tree_sha256,
             error_rules=mapped.error_rules,
             legacy_error_rows=len(tables["HAS_ERROR"].rows),
             manual_resolved=mapped.manual_resolved,
@@ -275,4 +279,4 @@ class CsvLegacyImporter(LegacyTools):
             manifest_reason=manifest_reason,
             documents_without_process=without_process,
         )
-        return LegacyImportResult(snapshot=snapshot, report=report, copy_plan=copy_plan)
+        return LegacyImportResult(snapshot=snapshot, report=report)

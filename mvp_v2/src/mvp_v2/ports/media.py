@@ -15,7 +15,7 @@ class MediaVerificationError(Exception):
 
 
 class MediaResolver(Protocol):
-    """Verify media below an implementation-owned authority root without mutation."""
+    """Verify media below an configured runtime data root without mutation."""
 
     def verify(
         self, relative_path: RelativePath, expected_sha256: Sha256

@@ -6,17 +6,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ValidationError
-
-from mvp_v2.application.dto.importing import CopyPlanEntry, ImportIssue, MediaCopyPlan
+from mvp_v2.application.dto.importing import ImportIssue, canonical_json_bytes
 from mvp_v2.domain import graph
 from mvp_v2.domain.snapshot import GraphSnapshot
 
 
-def build_media_plan(
+def scan_source_tree(
     root: Path, snapshot: GraphSnapshot, issues: list[ImportIssue]
-) -> MediaCopyPlan:
-    entries: list[CopyPlanEntry] = []
+) -> tuple[int, int, str]:
+    entries: list[tuple[str, int, str]] = []
     for directory in ("documents", "images", "uploads"):
         top = root / directory
         try:
@@ -74,28 +72,7 @@ def build_media_plan(
                         continue
                     try:
                         size, digest = _hash_file(path)
-                        try:
-                            entry = CopyPlanEntry(
-                                source_path=relative,
-                                target_path=relative,
-                                size=size,
-                                sha256=digest,
-                            )
-                        except ValidationError:
-                            issues.append(
-                                _issue(
-                                    "error",
-                                    "MEDIA_UNSAFE_PATH",
-                                    "media",
-                                    directory,
-                                    None,
-                                    "",
-                                    _safe_id(relative),
-                                    ("media path is not a safe lexical relative path"),
-                                )
-                            )
-                            continue
-                        entries.append(entry)
+                        entries.append((relative, size, digest))
                     except OSError:
                         issues.append(
                             _issue(
@@ -122,8 +99,8 @@ def build_media_plan(
                     "media directory could not be scanned",
                 )
             )
-    entries.sort(key=lambda item: item.target_path)
-    by_path = {item.target_path: item for item in entries}
+    entries.sort(key=lambda item: item[0])
+    by_path = {item[0]: item for item in entries}
     referenced = {
         (item.local_path, item.sha256, item.id, "DocumentVersion")
         for item in snapshot.document_versions
@@ -146,10 +123,10 @@ def build_media_plan(
                     None,
                     "local_path",
                     _safe_id(identifier),
-                    "referenced media file is missing from copy plan",
+                    "referenced media file is missing from source tree",
                 )
             )
-        elif referenced_entry.sha256 != digest:
+        elif referenced_entry[2] != digest:
             issues.append(
                 _issue(
                     "error",
@@ -182,7 +159,7 @@ def build_media_plan(
                 ]
                 if (
                     len(current_versions) == 1
-                    and upload_entry.sha256 != current_versions[0].sha256
+                    and upload_entry[2] != current_versions[0].sha256
                 ):
                     issues.append(
                         _issue(
@@ -209,10 +186,10 @@ def build_media_plan(
                     "file provenance is outside authorized source directories",
                 )
             )
-    hash_counts = Counter(item.sha256 for item in entries)
+    hash_counts = Counter(item[2] for item in entries)
     for relative_path in sorted(set(by_path) - ref_paths):
         entry = by_path[relative_path]
-        duplicate = hash_counts[entry.sha256] > 1
+        duplicate = hash_counts[entry[2]] > 1
         issues.append(
             _issue(
                 "info",
@@ -224,15 +201,14 @@ def build_media_plan(
                 None,
                 "",
                 _safe_id(relative_path),
-                f"unreferenced file will be copied; size={entry.size}; "
-                f"sha256={entry.sha256}",
+                f"unreferenced source file; size={entry[1]}; sha256={entry[2]}",
             )
         )
-    return MediaCopyPlan(
-        entries=tuple(entries),
-        total_files=len(entries),
-        total_bytes=sum(item.size for item in entries),
-    )
+    tree_facts = [
+        {"path": path, "size": size, "sha256": digest} for path, size, digest in entries
+    ]
+    tree_digest = hashlib.sha256(canonical_json_bytes(tree_facts)).hexdigest()
+    return len(entries), sum(item[1] for item in entries), tree_digest
 
 
 def _hash_file(path: Path) -> tuple[int, str]:

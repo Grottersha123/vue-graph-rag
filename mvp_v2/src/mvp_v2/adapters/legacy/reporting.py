@@ -8,10 +8,8 @@ from mvp_v2.application.dto.importing import (
     FieldDisposition,
     ImportIssue,
     ImportReport,
-    MediaCopyPlan,
     NamedCount,
     SourceCsvFact,
-    compute_copy_plan_sha256,
     compute_report_id,
     compute_snapshot_sha256,
 )
@@ -23,7 +21,9 @@ def build_import_report(
     source_facts: tuple[SourceCsvFact, ...],
     snapshot: GraphSnapshot,
     issues: list[ImportIssue],
-    copy_plan: MediaCopyPlan,
+    source_file_count: int,
+    source_file_bytes: int,
+    source_tree_sha256: str,
     error_rules: int,
     legacy_error_rows: int,
     manual_resolved: int,
@@ -96,7 +96,6 @@ def build_import_report(
     )
     facts = dict(
         snapshot_sha256=compute_snapshot_sha256(snapshot),
-        copy_plan_sha256=compute_copy_plan_sha256(copy_plan),
         source_csvs=tuple(sorted(source_facts, key=lambda x: x.table)),
         target_counts=target_counts,
         transformations=(
@@ -156,8 +155,9 @@ def build_import_report(
             for name, count in sorted(manifest_reason.items())
         ),
         documents_without_process=documents_without_process,
-        media_plan_files=copy_plan.total_files,
-        media_plan_bytes=copy_plan.total_bytes,
+        source_file_count=source_file_count,
+        source_file_bytes=source_file_bytes,
+        source_tree_sha256=source_tree_sha256,
         issues=ordered_issues,
         is_publishable=not any(issue.severity == "error" for issue in ordered_issues),
     )
