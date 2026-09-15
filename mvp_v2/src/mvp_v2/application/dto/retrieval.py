@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BeforeValidator, Field, model_validator
 
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.domain.base import ContractModel, EntityId, FiniteVector, NonBlankText
+from mvp_v2.domain.base import (
+    ContractModel,
+    EntityId,
+    FiniteVector,
+    NonBlankText,
+    RequiredMultilineText,
+)
 
 PositiveInt = Annotated[int, Field(strict=True, ge=1, le=9_223_372_036_854_775_807)]
+ContextScope: TypeAlias = Literal["asset", "full_document", "chunk_window"]
 
 
 class SubjectKind(StrEnum):
@@ -110,7 +117,10 @@ class Evidence(ContractModel):
     subject: SubjectRef
     embedding_id: EntityId
     score: Annotated[float, Field(strict=True, allow_inf_nan=False)]
-    text: NonBlankText
+    text: RequiredMultilineText
+    matched_chunk_position: Annotated[int, Field(strict=True, ge=0)] | None
+    document_chunk_count: Annotated[int, Field(strict=True, ge=0)]
+    context_scope: ContextScope
     document_id: EntityId
     document_title: NonBlankText
     source_url: str

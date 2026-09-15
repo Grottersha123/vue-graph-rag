@@ -4,9 +4,14 @@ from typing import Annotated
 
 from pydantic import Field, model_validator
 
-from mvp_v2.application.dto.retrieval import Evidence, SearchRequest
+from mvp_v2.application.dto.retrieval import ContextScope, Evidence, SearchRequest
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.domain.base import ContractModel, EntityId, NonBlankText
+from mvp_v2.domain.base import (
+    ContractModel,
+    EntityId,
+    NonBlankText,
+    RequiredMultilineText,
+)
 
 
 class ChatRequest(ContractModel):
@@ -26,6 +31,10 @@ class ChatRequest(ContractModel):
 class Citation(ContractModel):
     number: Annotated[int, Field(strict=True, ge=1, le=100)]
     evidence_id: EntityId
+    score: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+    matched_chunk_position: Annotated[int, Field(strict=True, ge=0)] | None
+    document_chunk_count: Annotated[int, Field(strict=True, ge=0)]
+    context_scope: ContextScope
     document_id: EntityId
     document_title: NonBlankText
     version_id: EntityId
@@ -35,7 +44,7 @@ class Citation(ContractModel):
 
 
 class ChatAnswer(ContractModel):
-    answer: NonBlankText
+    answer: RequiredMultilineText
     citations: tuple[Citation, ...]
     evidence: tuple[Evidence, ...]
     generated: bool

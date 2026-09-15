@@ -42,6 +42,8 @@ from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
 
 VECTOR_INDEX: Final = "embedding_cosine_idx"
+_PURPOSE_OVERFETCH_FACTOR: Final = 10
+_MAX_PURPOSE_CANDIDATES: Final = 1_000
 DATABASE_MANIFEST: Final = "_mvp_v2_manifest.json"
 
 
@@ -410,15 +412,31 @@ class LadybugAnn:
             for purpose in request.purposes
         ):
             raise ValueError("query purposes are invalid")
-        purposes = tuple(p.value for p in request.purposes)
+        _execute(self._connection, "LOAD vector")
+        all_purposes = {
+            EmbeddingPurpose.CHUNK_RETRIEVAL,
+            EmbeddingPurpose.ASSET_DESCRIPTION_RETRIEVAL,
+        }
+        embedding_count = next(
+            (
+                item.count
+                for item in self._manifest.row_counts
+                if item.table == "Embedding"
+            ),
+            request.limit,
+        )
+        candidate_limit = request.limit
+        if set(request.purposes) != all_purposes:
+            available = max(request.limit, embedding_count)
+            budget = min(
+                request.limit * _PURPOSE_OVERFETCH_FACTOR,
+                _MAX_PURPOSE_CANDIDATES,
+            )
+            candidate_limit = min(available, budget)
         rows = _execute(
             self._connection,
-            f"CALL QUERY_VECTOR_INDEX('Embedding', '{VECTOR_INDEX}', $vector, $k, efs := 32) YIELD node, distance WHERE node.purpose IN $purposes RETURN node.id, node.purpose, distance",
-            {
-                "vector": list(request.vector),
-                "k": request.limit,
-                "purposes": list(purposes),
-            },
+            f"CALL QUERY_VECTOR_INDEX('Embedding', '{VECTOR_INDEX}', $vector, $k, efs := 32) YIELD node, distance RETURN node.id, node.purpose, distance",
+            {"vector": list(request.vector), "k": candidate_limit},
         )
         hits = []
         for embedding_id, purpose_raw, distance_raw in rows:
@@ -430,7 +448,7 @@ class LadybugAnn:
             except ValueError as error:
                 raise LadybugCapabilityError("ANN returned invalid purpose") from error
             if purpose not in request.purposes:
-                raise LadybugCapabilityError("ANN returned unexpected purpose")
+                continue
             kind = (
                 SubjectKind.CHUNK
                 if purpose is EmbeddingPurpose.CHUNK_RETRIEVAL
@@ -448,6 +466,6 @@ class LadybugAnn:
                     score=1.0 - distance,
                 )
             )
-        return tuple(sorted(hits, key=lambda x: (-x.score, x.embedding_id)))[
-            : request.limit
-        ]
+            if len(hits) == request.limit:
+                break
+        return tuple(sorted(hits, key=lambda x: (-x.score, x.embedding_id)))

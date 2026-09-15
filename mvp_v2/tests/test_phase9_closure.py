@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from mvp_v2.application.dto.retrieval import (
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.relations import RelationError, RelationKind, RelationService
 from mvp_v2.ports.media import MediaVerificationError
-from mvp_v2.presentation.app import _asset_label
+from mvp_v2.presentation.app import _asset_label, _run_visible_operation
 from mvp_v2.presentation.controller import (
     commit_ingestion,
     configure_ladybug_home,
@@ -62,12 +64,25 @@ class Model:
         return "Bound answer [1]"
 
 
+class SequenceModel:
+    def __init__(self, responses: tuple[str, ...]) -> None:
+        self.responses = iter(responses)
+        self.calls: list[str] = []
+
+    def generate(self, *, prompt: str, model: str) -> str:
+        self.calls.append(prompt)
+        return next(self.responses)
+
+
 def evidence() -> Evidence:
     return Evidence(
         subject=SubjectRef(kind=SubjectKind.CHUNK, id="chunk"),
         embedding_id="embedding-chunk",
         score=0.9,
         text="fact",
+        matched_chunk_position=0,
+        document_chunk_count=1,
+        context_scope="full_document",
         document_id="document",
         document_title="Title",
         source_url="",
@@ -124,7 +139,29 @@ def test_chat_binds_response_and_numbered_citation() -> None:
     assert answer.answer == "Bound answer [1]"
     assert answer.citations[0].number == 1
     assert answer.citations[0].evidence_id == answer.evidence[0].embedding_id
+    assert "Respond in Russian." in model.calls[0]
     assert len(model.calls[0]) < 16_000
+
+
+def test_chat_retries_once_for_out_of_range_citation() -> None:
+    model = SequenceModel(
+        ("Wrong citation [15]", "Correct answer:\n- first item [1]")
+    )
+
+    answer = ChatService(Search((evidence(),)), model).answer(request())
+
+    assert answer.answer == "Correct answer:\n- first item [1]"
+    assert len(model.calls) == 2
+    assert "The only allowed citation tokens are: [1]." in model.calls[1]
+
+
+def test_chat_rejects_persistently_invalid_citation_after_one_retry() -> None:
+    model = SequenceModel(("Wrong [15]", "Still wrong [15]"))
+
+    with pytest.raises(ChatError, match="citation is out of range"):
+        ChatService(Search((evidence(),)), model).answer(request())
+
+    assert len(model.calls) == 2
 
 
 def test_relation_add_delete_and_duplicate_invariants() -> None:
@@ -171,6 +208,31 @@ def test_invalid_runtime_config_is_not_replaced_by_defaults() -> None:
                 "ladybug_home": "/tmp/out",
             }
         )
+
+
+def test_visible_operation_shows_timed_spinner_and_runs_logged_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mvp_v2.presentation import app as presentation
+
+    observed: list[object] = []
+
+    @contextmanager
+    def spinner(message: str, *, show_time: bool) -> Iterator[None]:
+        observed.append((message, show_time))
+        yield
+
+    def run_logged(operation: str, action: Callable[[], int]) -> int:
+        observed.append(operation)
+        return action()
+
+    monkeypatch.setattr(presentation.st, "spinner", spinner)
+    monkeypatch.setattr(presentation, "run_logged_operation", run_logged)
+
+    result = _run_visible_operation("database_build", "Building…", lambda: 42)
+
+    assert result == 42
+    assert observed == [("Building…", True), "database_build"]
 
 
 def test_asset_label_uses_caption_then_local_path() -> None:

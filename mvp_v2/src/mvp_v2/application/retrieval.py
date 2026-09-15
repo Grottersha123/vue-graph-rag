@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Final, Literal
+
 from mvp_v2.application.dto.retrieval import (
     EmbeddingProviderOutput,
     Evidence,
@@ -11,6 +13,11 @@ from mvp_v2.application.manifests import DatabaseManifest
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import AnnPort
 from mvp_v2.ports.models import EmbeddingModel
+
+_DOCUMENT_CONTEXT_MAX_CHARS: Final = 1_400
+_ANN_OVERFETCH_FACTOR: Final = 3
+_ANN_OVERFETCH_MAX_CANDIDATES: Final = 30
+_CHUNK_NEIGHBOR_RADIUS: Final = 1
 
 
 class SearchError(ValueError):
@@ -56,10 +63,38 @@ class SearchService:
                 space=output.space,
                 vector=output.vector,
                 purposes=request.purposes,
-                limit=request.limit,
+                limit=max(
+                    request.limit,
+                    min(
+                        request.limit * _ANN_OVERFETCH_FACTOR,
+                        _ANN_OVERFETCH_MAX_CANDIDATES,
+                    ),
+                ),
             )
         )
-        return tuple(_hydrate(self._snapshot, hit) for hit in hits)
+        evidence: list[Evidence] = []
+        merged_texts: dict[str, list[str]] = {}
+        for hit in hits:
+            item = _hydrate(self._snapshot, hit)
+            existing = next(
+                (e for e in evidence if e.version_id == item.version_id), None
+            )
+            if existing is None:
+                if len(evidence) == request.limit:
+                    continue
+                evidence.append(item)
+                merged_texts[item.version_id] = [item.text]
+                continue
+            parts = merged_texts[existing.version_id]
+            joined = "\n\n".join(parts)
+            if item.text in joined:
+                continue
+            if len(joined) + 2 + len(item.text) <= _DOCUMENT_CONTEXT_MAX_CHARS:
+                parts.append(item.text)
+        return tuple(
+            item.model_copy(update={"text": "\n\n".join(merged_texts[item.version_id])})
+            for item in evidence
+        )
 
 
 def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
@@ -72,6 +107,7 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
         )
         owner = owners[0] if len(owners) == 1 else None
         text = chunk.content if chunk else ""
+        matched_chunk_position = chunk.position if chunk else None
         subject_exists = chunk is not None and len(owners) == 1
     else:
         asset = assets.get(hit.subject.id)
@@ -80,6 +116,7 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
         )
         owner = owners[0] if len(owners) == 1 else None
         text = asset.llm_description if asset else ""
+        matched_chunk_position = None
         subject_exists = asset is not None and len(owners) == 1
     versions = {x.id: x for x in snapshot.document_versions}
     version = versions.get(owner or "")
@@ -97,6 +134,44 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
         or not text.strip()
     ):
         raise SearchError("hit does not hydrate to current active evidence")
+    version_chunks = tuple(
+        sorted(
+            (
+                chunks[edge.target_id]
+                for edge in snapshot.has_chunks
+                if edge.source_id == version.id and edge.target_id in chunks
+            ),
+            key=lambda item: (item.position, item.id),
+        )
+    )
+    context_scope: Literal["asset", "full_document", "chunk_window"] = "asset"
+    if matched_chunk_position is not None:
+        full_text = "\n\n".join(item.content for item in version_chunks)
+        if len(full_text) <= _DOCUMENT_CONTEXT_MAX_CHARS:
+            text = full_text
+            context_scope = "full_document"
+        else:
+            matched_index = next(
+                index
+                for index, item in enumerate(version_chunks)
+                if item.id == hit.subject.id
+            )
+            start = max(0, matched_index - _CHUNK_NEIGHBOR_RADIUS)
+            stop = matched_index + _CHUNK_NEIGHBOR_RADIUS + 1
+            window_chunks = version_chunks[start:stop]
+            window_text = "\n\n".join(item.content for item in window_chunks)
+            matched_offset = window_text.find(version_chunks[matched_index].content)
+            excerpt_start = max(
+                0,
+                min(
+                    matched_offset - _DOCUMENT_CONTEXT_MAX_CHARS // 4,
+                    len(window_text) - _DOCUMENT_CONTEXT_MAX_CHARS,
+                ),
+            )
+            text = window_text[
+                excerpt_start : excerpt_start + _DOCUMENT_CONTEXT_MAX_CHARS
+            ]
+            context_scope = "chunk_window"
     source_ids = {x.id: x.code for x in snapshot.source_types}
     source = next(
         (
@@ -117,6 +192,9 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
         embedding_id=hit.embedding_id,
         score=hit.score,
         text=text,
+        matched_chunk_position=matched_chunk_position,
+        document_chunk_count=len(version_chunks),
+        context_scope=context_scope,
         document_id=document.id,
         document_title=document.title,
         source_url=document.source_url,

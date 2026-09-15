@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,8 +50,15 @@ SPACE = EmbeddingSpaceIdentity(
 )
 
 
-def _manifest(space: EmbeddingSpaceIdentity = SPACE) -> DatabaseManifest:
-    counts = tuple(TableCount(table=name, count=0) for name in TABLE_NAMES)
+def _manifest(
+    space: EmbeddingSpaceIdentity = SPACE, *, embedding_count: int = 0
+) -> DatabaseManifest:
+    counts = tuple(
+        TableCount(
+            table=name, count=embedding_count if name == "Embedding" else 0
+        )
+        for name in TABLE_NAMES
+    )
     values: dict[str, Any] = dict(
         database_name="active",
         built_at=NOW,
@@ -137,7 +145,7 @@ class _Connection:
                     ["embedding-asset", "asset_description_retrieval", 0.25],
                 ]
             )
-        identifier = "chunk" if len(self.calls) == 2 else "asset"
+        identifier = "chunk" if "HAS_EMBEDDING_CHUNK" in query else "asset"
         return _Result([[identifier]])
 
 
@@ -179,14 +187,41 @@ def test_ann_query_syntax_filtering_and_deterministic_finite_hits() -> None:
             limit=2,
         )
     )
-    assert (
-        "efs := 32" in connection.calls[0][0]
-        and "node.purpose IN $purposes" in connection.calls[0][0]
+    assert connection.calls[0] == ("LOAD vector", None)
+    vector_call = next(
+        call for call in connection.calls if "QUERY_VECTOR_INDEX" in call[0]
     )
+    assert "efs := 32" in vector_call[0]
+    assert " WHERE " not in vector_call[0]
+    assert vector_call[1] == {"vector": [1.0, 2.0], "k": 2}
     assert [(hit.embedding_id, hit.score) for hit in hits] == [
         ("embedding-asset", 0.75),
         ("embedding-chunk", 0.75),
     ]
+
+
+def test_ann_subset_purpose_uses_bounded_overfetch_and_stops_at_limit() -> None:
+    connection = _Connection()
+    ann = LadybugAnn(connection, _manifest(embedding_count=50_000))
+
+    hits = ann.query(
+        VectorQuery(
+            space=SPACE,
+            vector=(1.0, 2.0),
+            purposes=(EmbeddingPurpose.ASSET_DESCRIPTION_RETRIEVAL,),
+            limit=1,
+        )
+    )
+
+    vector_call = next(
+        call for call in connection.calls if "QUERY_VECTOR_INDEX" in call[0]
+    )
+    ownership_calls = [
+        call for call in connection.calls if "HAS_EMBEDDING_" in call[0]
+    ]
+    assert vector_call[1] == {"vector": [1.0, 2.0], "k": 10}
+    assert len(ownership_calls) == 1
+    assert [hit.embedding_id for hit in hits] == ["embedding-asset"]
 
 
 class _Model:
@@ -260,15 +295,37 @@ def test_search_maps_bad_provider_and_hydrates_chunk_asset_citations() -> None:
         )
         for item in evidence
     ] == [
-        (SubjectKind.CHUNK, "hello", "document", "version", "documents/a.md"),
-        (SubjectKind.ASSET, "desc", "document", "version", "documents/a.md"),
+        (SubjectKind.CHUNK, "hello\n\ndesc", "document", "version", "documents/a.md"),
     ]
+    assert evidence[0].matched_chunk_position == 0
+    assert evidence[0].document_chunk_count == 1
+    assert evidence[0].context_scope == "full_document"
     assert all(
         item.statuses == ("ready",)
         and item.roles == ("student",)
         and item.processes == ("onboarding",)
         for item in evidence
     )
+
+
+def test_search_hydrates_multiline_quiz_chunk() -> None:
+    snapshot = build_valid_snapshot()
+    text = "1. Что нужно для начала?\n- заполнить файл\n- просто ожидать"
+    chunk = snapshot.chunks[0].model_copy(
+        update={
+            "content": text,
+            "content_hash": hashlib.sha256(text.encode()).hexdigest(),
+        }
+    )
+
+    evidence = SearchService(
+        _Model(((1.0, 2.0),)),
+        _Ann(),
+        _manifest(),
+        snapshot.model_copy(update={"chunks": (chunk,)}),
+    ).search(_search_request())
+
+    assert evidence[0].text == text + "\n\ndesc"
 
 
 def _three_versions() -> GraphSnapshot:

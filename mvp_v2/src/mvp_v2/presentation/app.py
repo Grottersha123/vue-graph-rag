@@ -4,10 +4,11 @@ import importlib
 import os
 import re
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import streamlit as st
 from pydantic import ValidationError
@@ -17,9 +18,10 @@ from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_dump
 from mvp_v2.adapters.legacy.importer import CsvLegacyImporter
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
-from mvp_v2.application.chat import ChatService
+from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chunk_backfill import build_missing_chunks
 from mvp_v2.application.deletion import preview_deletion
+from mvp_v2.application.document_view import build_document_view
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
     DatabaseIdentity,
@@ -82,6 +84,7 @@ TAB_LABELS = (
     "Errors/Import report",
 )
 _SAFE_DB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+_ResultT = TypeVar("_ResultT")
 
 
 def _environment_text(name: str, default: str = "") -> str:
@@ -106,6 +109,13 @@ def _action_button(label: str, *, disabled: bool = False) -> bool:
     if clicked:
         record_user_action(label)
     return clicked
+
+
+def _run_visible_operation(
+    operation: str, message: str, action: Callable[[], _ResultT]
+) -> _ResultT:
+    with st.spinner(message, show_time=True):
+        return run_logged_operation(operation, action)
 
 
 def run() -> None:
@@ -255,11 +265,15 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 input_path=input_path,
             )
             try:
-                st.session_state.preview = preview_ingestion(
-                    snapshot,
-                    request,
-                    working_root=config.working_root,
-                    input_root=input_root,
+                st.session_state.preview = _run_visible_operation(
+                    "ingestion_preview",
+                    "Подготовка документа… Подождите.",
+                    lambda: preview_ingestion(
+                        snapshot,
+                        request,
+                        working_root=config.working_root,
+                        input_root=input_root,
+                    ),
                 )
             finally:
                 if kind != "url":
@@ -280,8 +294,12 @@ def _upload(config: UiRuntimeConfig | None) -> None:
     if _action_button("Commit", disabled=blocked or missing or preview is None):
         try:
             assert config is not None
-            committed = commit_ingestion(
-                snapshot, preview, working_root=config.working_root
+            committed = _run_visible_operation(
+                "ingestion_commit",
+                "Загрузка документа… Подождите.",
+                lambda: commit_ingestion(
+                    snapshot, preview, working_root=config.working_root
+                ),
             )
             mark_snapshot_dirty(st.session_state, committed)
             st.session_state.preview = None
@@ -298,8 +316,47 @@ def _documents(config: UiRuntimeConfig | None) -> None:
     st.subheader("Documents")
     blocked = _blocked(config)
     snapshot = st.session_state.snapshot
-    st.dataframe([item.model_dump() for item in snapshot.documents])
-    st.dataframe([item.model_dump() for item in snapshot.document_versions])
+    document_rows = [item.model_dump() for item in snapshot.documents]
+    document_event = st.dataframe(
+        document_rows,
+        key="documents_table",
+        on_select="rerun",
+        selection_mode="single-row",
+        width="stretch",
+    )
+    selected_rows = cast(Any, document_event).selection.rows
+    if selected_rows:
+        try:
+            document_id = snapshot.documents[int(selected_rows[0])].id
+            view = build_document_view(snapshot, document_id)
+            st.markdown(f"### Preview: {view.document.title}")
+            st.json(
+                {
+                    "document_id": view.document.id,
+                    "version": view.version.version,
+                    "format": view.document.content_format,
+                    "source": view.document.source_url or view.version.local_path,
+                    "chunks": view.chunk_count,
+                    "assets": len(view.assets),
+                }
+            )
+            if view.content:
+                st.code(view.content, language="markdown", wrap_lines=True)
+            else:
+                st.info("This document has no indexed text content.")
+            if view.assets:
+                st.dataframe(
+                    [
+                        asset.model_dump(exclude={"llm_description"})
+                        for asset in view.assets
+                    ],
+                    width="stretch",
+                )
+        except (IndexError, TypeError, ValueError):
+            _record_error("Selected document could not be previewed.")
+    st.dataframe(
+        [item.model_dump() for item in snapshot.document_versions], width="stretch"
+    )
     ids = tuple(item.id for item in snapshot.documents)
     selected = st.selectbox("Deletion document ID", ids) if ids else None
     active = _active(config)
@@ -347,12 +404,16 @@ def _documents(config: UiRuntimeConfig | None) -> None:
             try:
                 assert config is not None and active is not None
                 configure_ladybug_home(config)
-                execution = confirm_deletion(
-                    snapshot=snapshot,
-                    command=command,
-                    confirmation=impact,
-                    config=config,
-                    active=active,
+                execution = _run_visible_operation(
+                    "deletion_rebuild",
+                    "Удаление данных и перестроение БД… Подождите.",
+                    lambda: confirm_deletion(
+                        snapshot=snapshot,
+                        command=command,
+                        confirmation=impact,
+                        config=config,
+                        active=active,
+                    ),
                 )
                 dump_path = config.dumps_root / (
                     f"dump-{execution.dump.dump_number:06d}"
@@ -453,8 +514,9 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
     if _action_button("Create missing text chunks", disabled=blocked):
         try:
             assert config is not None
-            updated = run_logged_operation(
+            updated = _run_visible_operation(
                 "chunk_generation",
+                "Создание chunks… Подождите.",
                 lambda: build_missing_chunks(
                     snapshot, FilesystemMediaResolver(config.working_root)
                 ),
@@ -507,8 +569,9 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
                     created_at=datetime.now(UTC),
                     batch_size=batch,
                 )
-                updated = run_logged_operation(
+                updated = _run_visible_operation(
                     "embedding_generation",
+                    "Создание embeddings… Подождите.",
                     partial(
                         build_embeddings,
                         snapshot,
@@ -556,8 +619,9 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
             image = FilesystemMediaResolver(config.working_root).read_verified(
                 asset.local_path, asset.sha256
             )
-            updated = run_logged_operation(
+            updated = _run_visible_operation(
                 "image_description",
+                "Создание описания изображения… Подождите.",
                 lambda: describe_asset(
                     snapshot,
                     asset_id,
@@ -610,7 +674,11 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
     ):
         try:
             assert selected is not None
-            dump_manifest, snapshot = load_verified_dump(selected)
+            dump_manifest, snapshot = _run_visible_operation(
+                "dump_loading",
+                "Загрузка snapshot… Подождите.",
+                lambda: load_verified_dump(selected),
+            )
             bind_snapshot(st.session_state, snapshot, dump_manifest, selected)
             st.session_state.active_db = None
             st.success("Verified dump loaded into session.")
@@ -624,8 +692,9 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
     ):
         try:
             assert config is not None
-            dump_manifest = run_logged_operation(
+            dump_manifest = _run_visible_operation(
                 "dump_publication",
+                "Публикация snapshot… Подождите.",
                 lambda: SnapshotPublicationService(
                     FilesystemDumpRepository()
                 ).publish(
@@ -662,20 +731,40 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
                 ],
             }
         )
-    selectable = tuple(
-        (p, m) for p, m in artifacts if not database_is_stale(m, current_dump)
-    )
-    active = (
+    selected_database = (
         st.selectbox(
-            "Active verified current DB",
-            selectable,
-            format_func=lambda item: item[0].name,
+            "Available verified DB",
+            artifacts,
+            format_func=lambda item: (
+                item[0].name
+                + (" (current)" if not database_is_stale(item[1], current_dump) else "")
+            ),
         )
-        if selectable
+        if artifacts
         else None
     )
-    if _action_button("Use selected DB", disabled=blocked or active is None):
-        st.session_state.active_db = active
+    if _action_button(
+        "Load selected DB with its source dump",
+        disabled=blocked or selected_database is None or config is None,
+    ):
+        try:
+            assert config is not None and selected_database is not None
+            database_path, database_manifest = selected_database
+            source_dump = config.dumps_root / (
+                f"dump-{database_manifest.source_dump_number:06d}"
+            )
+            dump_manifest, snapshot = _run_visible_operation(
+                "database_loading",
+                "Загрузка LadybugDB и связанного snapshot… Подождите.",
+                lambda: load_verified_dump(source_dump),
+            )
+            if database_is_stale(database_manifest, dump_manifest):
+                raise ValueError("database manifest does not match its source dump")
+            bind_snapshot(st.session_state, snapshot, dump_manifest, source_dump)
+            st.session_state.active_db = (database_path, database_manifest)
+            st.success("Database and its exact source snapshot loaded and selected.")
+        except (ValueError, OSError, RuntimeError, ValidationError):
+            _record_error("Database or its exact source snapshot could not be loaded.")
     name = st.text_input("Safe new database name")
     base, emodel, eversion, dimension = _model_fields("db_")
     del base
@@ -705,8 +794,9 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
             assert config is not None and selected is not None
             configure_ladybug_home(config)
             target = config.databases_root / f"{name}.lbdb"
-            db_manifest = run_logged_operation(
+            db_manifest = _run_visible_operation(
                 "database_build",
+                "Перестроение LadybugDB… Подождите.",
                 lambda: build_database(
                     dump_path=selected,
                     target=target,
@@ -740,6 +830,7 @@ def _with_search(
     config: UiRuntimeConfig,
     active: tuple[Path, DatabaseManifest],
     request: SearchRequest,
+    base_url: str,
 ) -> tuple[Any, ...]:
     path, manifest = active
     configure_ladybug_home(config)
@@ -749,7 +840,7 @@ def _with_search(
         database = ladybug.Database(str(path / "database.lbug"))
         connection = ladybug.Connection(database)
         service = SearchService(
-            OllamaAdapter(LocalHttpTransport(st.session_state.search_base)),
+            OllamaAdapter(LocalHttpTransport(base_url)),
             LadybugAnn(connection, manifest),
             manifest,
             st.session_state.snapshot,
@@ -790,7 +881,6 @@ def _search(config: UiRuntimeConfig | None) -> None:
     ):
         try:
             assert config is not None and active is not None
-            st.session_state.search_base = base
             manifest = active[1]
             request = SearchRequest(
                 question=question,
@@ -802,7 +892,11 @@ def _search(config: UiRuntimeConfig | None) -> None:
                 limit=limit,
                 authorization=ModelAuthorization(allow=True, operation="embedding"),
             )
-            st.session_state.search_evidence = _with_search(config, active, request)
+            st.session_state.search_evidence = _run_visible_operation(
+                "search",
+                "Поиск по базе… Подождите.",
+                lambda: _with_search(config, active, request, base),
+            )
         except (ValueError, OSError, RuntimeError, ValidationError):
             _record_error(
                 "Search failed safely; verify DB, model identity, and authorization."
@@ -810,8 +904,17 @@ def _search(config: UiRuntimeConfig | None) -> None:
     for number, item in enumerate(st.session_state.get("search_evidence", ()), 1):
         st.write(f"Evidence {number}")
         st.write(item.text)
+        chunk_label = (
+            "asset"
+            if item.matched_chunk_position is None
+            else f"{item.matched_chunk_position + 1}/{item.document_chunk_count}"
+        )
         st.write(
-            f"[{number}] {item.document_title} — document={item.document_id}, version={item.version}, embedding={item.embedding_id}, score={item.score:.6f}, source={item.source_url or item.local_path}"  # noqa: E501
+            f"[{number}] {item.document_title} — score={item.score:.6f}, "
+            f"chunk={chunk_label}, context={item.context_scope}, "
+            f"document={item.document_id}, version={item.version}, "
+            f"embedding={item.embedding_id}, "
+            f"source={item.source_url or item.local_path}"
         )
 
 
@@ -821,6 +924,7 @@ def _chat(config: UiRuntimeConfig | None) -> None:
         st.session_state.chat_history = []
     active = _active(config)
     base, limit, allow_embed = _search_fields("chat")
+    limit = min(limit, MAX_EVIDENCE_ITEMS)
     model, version = (
         st.text_input("Exact chat model", _environment_text("MVP_V2_CHAT_MODEL")),
         st.text_input(
@@ -868,16 +972,20 @@ def _chat(config: UiRuntimeConfig | None) -> None:
                         ),
                         adapter,
                     )
-                    answer = service.answer(
-                        ChatRequest(
-                            question=question,
-                            search=search_request,
-                            model=model.strip(),
-                            model_version=version.strip(),
-                            authorization=ModelAuthorization(
-                                allow=True, operation="generation"
-                            ),
-                        )
+                    answer = _run_visible_operation(
+                        "chat",
+                        "Поиск источников и генерация ответа… Подождите.",
+                        lambda: service.answer(
+                            ChatRequest(
+                                question=question,
+                                search=search_request,
+                                model=model.strip(),
+                                model_version=version.strip(),
+                                authorization=ModelAuthorization(
+                                    allow=True, operation="generation"
+                                ),
+                            )
+                        ),
                     )
                 finally:
                     if connection is not None:
@@ -891,8 +999,21 @@ def _chat(config: UiRuntimeConfig | None) -> None:
         st.write(f"Question: {prior_question}")
         st.write(answer.answer)
         for citation in answer.citations:
+            chunk_label = (
+                "asset"
+                if citation.matched_chunk_position is None
+                else (
+                    f"{citation.matched_chunk_position + 1}/"
+                    f"{citation.document_chunk_count}"
+                )
+            )
             st.write(
-                f"[{citation.number}] {citation.document_title} — document={citation.document_id}, version={citation.version}, evidence={citation.evidence_id}, source={citation.source_url or citation.local_path}"  # noqa: E501
+                f"[{citation.number}] {citation.document_title} — "
+                f"score={citation.score:.6f}, chunk={chunk_label}, "
+                f"context={citation.context_scope}, "
+                f"document={citation.document_id}, version={citation.version}, "
+                f"evidence={citation.evidence_id}, "
+                f"source={citation.source_url or citation.local_path}"
             )
 
 
@@ -924,8 +1045,9 @@ def _errors(config: UiRuntimeConfig | None) -> None:
             service = LegacyMigrationService(
                 importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
             )
-            st.session_state.import_result = run_logged_operation(
+            st.session_state.import_result = _run_visible_operation(
                 "legacy_import_preview",
+                "Проверка legacy-данных… Подождите.",
                 lambda: service.preview(runtime_data_root=config.working_root),
             )
         except (ValueError, OSError, RuntimeError):
@@ -947,8 +1069,9 @@ def _errors(config: UiRuntimeConfig | None) -> None:
                 importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
             )
             typed = cast(LegacyImportResult, result)
-            manifest = run_logged_operation(
+            manifest = _run_visible_operation(
                 "legacy_import_publication",
+                "Импорт legacy-данных… Подождите.",
                 lambda: service.publish(
                     result=typed,
                     approved_report_id=approved,
