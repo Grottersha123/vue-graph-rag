@@ -22,6 +22,7 @@ from mvp_v2.application.dto.retrieval import (
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.relations import RelationError, RelationKind, RelationService
 from mvp_v2.ports.media import MediaVerificationError
+from mvp_v2.presentation.app import _asset_label
 from mvp_v2.presentation.controller import (
     commit_ingestion,
     configure_ladybug_home,
@@ -170,6 +171,12 @@ def test_invalid_runtime_config_is_not_replaced_by_defaults() -> None:
                 "ladybug_home": "/tmp/out",
             }
         )
+
+
+def test_asset_label_uses_caption_then_local_path() -> None:
+    asset = build_valid_snapshot().assets[0]
+    assert _asset_label(asset) == "cap"
+    assert _asset_label(asset.model_copy(update={"caption": ""})) == "images/a.png"
 
 
 def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
@@ -323,13 +330,94 @@ def test_configure_ladybug_home_sets_exact_validated_home(
 def test_application_logging_is_idempotent_and_readable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import logging
+    from loguru import logger
 
     from mvp_v2.presentation import logging as app_logging
 
-    path = tmp_path / "runtime" / "logs" / "app.log"
-    monkeypatch.setattr(app_logging, "application_log_path", lambda: path)
-    path.parent.mkdir(parents=True)
-    path.write_text("2026-09-15T13:00:00+0000 ERROR mvp_v2 database build failed\n")
-    assert "database build failed" in app_logging.read_log_tail()
-    assert logging.getLogger("mvp_v2").name == "mvp_v2"
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(app_logging, "_runtime_root", lambda: runtime)
+    monkeypatch.setattr(app_logging, "_SINK_ID", None)
+    monkeypatch.setattr(app_logging, "_SINK_PATH", None)
+    monkeypatch.delattr(logger, app_logging._LOGGER_STATE_ATTRIBUTE, raising=False)
+    app_logging.configure_application_logging()
+    first_sink = app_logging._SINK_ID
+    app_logging.configure_application_logging()
+    second_sink = app_logging._SINK_ID
+    assert second_sink is not None
+    assert second_sink == first_sink
+    logger.remove(second_sink)
+    app_logging.configure_application_logging()
+    recovered_sink = app_logging._SINK_ID
+    assert recovered_sink is not None
+    assert recovered_sink != second_sink
+
+    app_logging.record_user_action("Preview")
+    assert app_logging.run_logged_operation("dump_publication", lambda: 42) == 42
+    with pytest.raises(ValueError, match="broken"):
+        app_logging.run_logged_operation(
+            "database_build", lambda: (_ for _ in ()).throw(ValueError("broken"))
+        )
+
+    content = app_logging.read_log_tail()
+    assert "ui_action clicked action=Preview" in content
+    assert "dump_publication succeeded" in content
+    assert "database_build failed" in content
+    assert "Traceback" in content
+    if recovered_sink is not None:
+        logger.remove(recovered_sink)
+    monkeypatch.delattr(logger, app_logging._LOGGER_STATE_ATTRIBUTE, raising=False)
+    monkeypatch.setattr(app_logging, "_SINK_ID", None)
+    monkeypatch.setattr(app_logging, "_SINK_PATH", None)
+
+
+def test_application_logging_replaces_stale_process_local_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loguru import logger
+
+    from mvp_v2.presentation import logging as app_logging
+
+    monkeypatch.setattr(app_logging, "_runtime_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(app_logging, "_SINK_ID", None)
+    monkeypatch.setattr(app_logging, "_SINK_PATH", None)
+    monkeypatch.setattr(
+        logger, app_logging._LOGGER_STATE_ATTRIBUTE, (2_147_483_647, "/stale/path")
+    )
+
+    app_logging.configure_application_logging()
+
+    sink_id = app_logging._SINK_ID
+    assert sink_id is not None
+    app_logging.record_user_action("Preview")
+    assert "clicked action=Preview" in app_logging.read_log_tail()
+    logger.remove(sink_id)
+    monkeypatch.delattr(logger, app_logging._LOGGER_STATE_ATTRIBUTE, raising=False)
+
+
+def test_application_logging_concurrent_configuration_uses_one_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from loguru import logger
+
+    from mvp_v2.presentation import logging as app_logging
+
+    monkeypatch.setattr(app_logging, "_runtime_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(app_logging, "_SINK_ID", None)
+    monkeypatch.setattr(app_logging, "_SINK_PATH", None)
+    monkeypatch.delattr(logger, app_logging._LOGGER_STATE_ATTRIBUTE, raising=False)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        tuple(
+            executor.map(
+                lambda _: app_logging.configure_application_logging(), range(32)
+            )
+        )
+    sink_id = app_logging._SINK_ID
+    assert sink_id is not None
+    app_logging.record_user_action("Concurrent check")
+    assert app_logging.read_log_tail().count("clicked action=Concurrent check") == 1
+
+    logger.remove(sink_id)
+    monkeypatch.delattr(logger, app_logging._LOGGER_STATE_ATTRIBUTE, raising=False)

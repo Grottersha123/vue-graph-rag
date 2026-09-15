@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import importlib
-import logging
 import os
 import re
 import sys
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +18,7 @@ from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_du
 from mvp_v2.adapters.legacy.importer import CsvLegacyImporter
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import ChatService
+from mvp_v2.application.chunk_backfill import build_missing_chunks
 from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
@@ -45,6 +46,7 @@ from mvp_v2.application.retrieval import SearchService
 from mvp_v2.application.services.migration import LegacyMigrationService
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
+from mvp_v2.domain.graph import Asset
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.presentation.controller import (
     active_database,
@@ -64,6 +66,9 @@ from mvp_v2.presentation.logging import (
     application_log_path,
     configure_application_logging,
     read_log_tail,
+    record_operation_error,
+    record_user_action,
+    run_logged_operation,
 )
 
 TAB_LABELS = (
@@ -77,7 +82,6 @@ TAB_LABELS = (
     "Errors/Import report",
 )
 _SAFE_DB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
-_LOGGER = logging.getLogger("mvp_v2")
 
 
 def _environment_text(name: str, default: str = "") -> str:
@@ -91,6 +95,17 @@ def _environment_dimension() -> int:
     except ValueError:
         return 768
     return value if value > 0 else 768
+
+
+def _asset_label(asset: Asset) -> str:
+    return asset.caption.strip() or asset.local_path
+
+
+def _action_button(label: str, *, disabled: bool = False) -> bool:
+    clicked = st.button(label, disabled=disabled)
+    if clicked:
+        record_user_action(label)
+    return clicked
 
 
 def run() -> None:
@@ -172,10 +187,9 @@ def _missing(config: UiRuntimeConfig) -> bool:
 def _record_error(message: str) -> None:
     error = sys.exception()
     if error is None:
-        _LOGGER.warning("operation warning: %s", message)
         display = message
     else:
-        _LOGGER.exception("operation failed: %s", message)
+        record_operation_error(message)
         detail = str(error).replace("\n", " ").replace("\r", " ")[:500]
         display = f"{message} [{type(error).__name__}: {detail}]"
     timestamp = datetime.now(UTC).isoformat(timespec="seconds")
@@ -222,7 +236,7 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         and status_id
         and (source_url.strip() if kind == "url" else uploads)
     )
-    if st.button("Preview", disabled=blocked or missing or not valid):
+    if _action_button("Preview", disabled=blocked or missing or not valid):
         try:
             assert config is not None
             input_root, input_path = config.working_root, ""
@@ -263,7 +277,7 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 "assets": len(preview.extracted.assets),
             }
         )
-    if st.button("Commit", disabled=blocked or missing or preview is None):
+    if _action_button("Commit", disabled=blocked or missing or preview is None):
         try:
             assert config is not None
             committed = commit_ingestion(
@@ -295,7 +309,7 @@ def _documents(config: UiRuntimeConfig | None) -> None:
         and active is not None
         and st.session_state.get("snapshot_dirty") is False
     )
-    if st.button("Preview deletion", disabled=not deletion_ready):
+    if _action_button("Preview deletion", disabled=not deletion_ready):
         try:
             assert active is not None
             command = DeletionCommand(
@@ -326,7 +340,7 @@ def _documents(config: UiRuntimeConfig | None) -> None:
             and dump_run_id == st.session_state.get("snapshot_dump_run_id")
             and build_id == active[1].build_id
         )
-        if st.button(
+        if _action_button(
             "Confirm deletion",
             disabled=not confirmed or not still_exact or config is None,
         ):
@@ -436,6 +450,26 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
     st.subheader("Chunks & Embeddings")
     blocked = _blocked(config)
     snapshot = st.session_state.snapshot
+    if _action_button("Create missing text chunks", disabled=blocked):
+        try:
+            assert config is not None
+            updated = run_logged_operation(
+                "chunk_generation",
+                lambda: build_missing_chunks(
+                    snapshot, FilesystemMediaResolver(config.working_root)
+                ),
+            )
+            created = len(updated.chunks) - len(snapshot.chunks)
+            if created:
+                mark_snapshot_dirty(st.session_state, updated)
+                st.success(f"Created {created} missing text chunks.")
+                snapshot = updated
+            else:
+                st.info("No missing text chunks were found.")
+        except (ValueError, OSError, RuntimeError, ValidationError):
+            _record_error(
+                "Chunk generation failed safely; the snapshot was not changed."
+            )
     st.dataframe([item.model_dump() for item in snapshot.chunks])
     st.dataframe([item.model_dump() for item in snapshot.assets])
     st.dataframe(
@@ -458,7 +492,7 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
         ("Build missing embeddings", "missing"),
         ("Rebuild all embeddings", "all"),
     ):
-        if st.button(label, disabled=not ready):
+        if _action_button(label, disabled=not ready):
             try:
                 request = EmbeddingRequest(
                     identity=ModelIdentity(
@@ -473,11 +507,20 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
                     created_at=datetime.now(UTC),
                     batch_size=batch,
                 )
-                updated = build_embeddings(
-                    snapshot, request, OllamaAdapter(LocalHttpTransport(base))
+                updated = run_logged_operation(
+                    "embedding_generation",
+                    partial(
+                        build_embeddings,
+                        snapshot,
+                        request,
+                        OllamaAdapter(LocalHttpTransport(base)),
+                    ),
                 )
-                mark_snapshot_dirty(st.session_state, updated)
-                st.success("Session embedding snapshot updated.")
+                if updated == snapshot:
+                    st.info("No eligible missing embeddings were found.")
+                else:
+                    mark_snapshot_dirty(st.session_state, updated)
+                    st.success("Session embedding snapshot updated.")
             except (ValueError, OSError, RuntimeError, ValidationError):
                 _record_error(
                     "Embedding operation failed safely; the snapshot was not changed."
@@ -485,7 +528,9 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
     assets = {item.id: item for item in snapshot.assets}
     asset_id = (
         st.selectbox(
-            "Asset", tuple(assets), format_func=lambda value: assets[value].name
+            "Asset",
+            tuple(assets),
+            format_func=lambda value: _asset_label(assets[value]),
         )
         if assets
         else None
@@ -497,7 +542,7 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
         "Exact vision model version", _environment_text("MVP_V2_VISION_MODEL_VERSION")
     )
     allow_vision = st.checkbox("Authorize this vision operation", value=False)
-    if st.button(
+    if _action_button(
         "Describe selected asset",
         disabled=blocked
         or asset_id is None
@@ -511,13 +556,16 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
             image = FilesystemMediaResolver(config.working_root).read_verified(
                 asset.local_path, asset.sha256
             )
-            updated = describe_asset(
-                snapshot,
-                asset_id,
-                image,
-                ModelAuthorization(allow=True, operation="vision_description"),
-                model=vision_model.strip(),
-                vision=OllamaAdapter(LocalHttpTransport(base)),
+            updated = run_logged_operation(
+                "image_description",
+                lambda: describe_asset(
+                    snapshot,
+                    asset_id,
+                    image,
+                    ModelAuthorization(allow=True, operation="vision_description"),
+                    model=vision_model.strip(),
+                    vision=OllamaAdapter(LocalHttpTransport(base)),
+                ),
             )
             mark_snapshot_dirty(st.session_state, updated)
             st.success(
@@ -557,7 +605,9 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
         if dumps
         else None
     )
-    if st.button("Load selected canonical dump", disabled=blocked or selected is None):
+    if _action_button(
+        "Load selected canonical dump", disabled=blocked or selected is None
+    ):
         try:
             assert selected is not None
             dump_manifest, snapshot = load_verified_dump(selected)
@@ -569,18 +619,21 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
     confirm = st.checkbox(
         "Confirm publish current snapshot as next immutable dump", value=False
     )
-    if st.button(
+    if _action_button(
         "Publish current snapshot", disabled=blocked or missing or not confirm
     ):
         try:
             assert config is not None
-            dump_manifest = SnapshotPublicationService(
-                FilesystemDumpRepository()
-            ).publish(
-                dumps_root=config.dumps_root,
-                snapshot=st.session_state.snapshot,
-                published_at=datetime.now(UTC),
-                media_resolver=FilesystemMediaResolver(config.working_root),
+            dump_manifest = run_logged_operation(
+                "dump_publication",
+                lambda: SnapshotPublicationService(
+                    FilesystemDumpRepository()
+                ).publish(
+                    dumps_root=config.dumps_root,
+                    snapshot=st.session_state.snapshot,
+                    published_at=datetime.now(UTC),
+                    media_resolver=FilesystemMediaResolver(config.working_root),
+                ),
             )
             dump_path = config.dumps_root / f"dump-{dump_manifest.dump_number:06d}"
             bind_snapshot(
@@ -621,7 +674,7 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
         if selectable
         else None
     )
-    if st.button("Use selected DB", disabled=blocked or active is None):
+    if _action_button("Use selected DB", disabled=blocked or active is None):
         st.session_state.active_db = active
     name = st.text_input("Safe new database name")
     base, emodel, eversion, dimension = _model_fields("db_")
@@ -647,24 +700,27 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
         and vversion.strip()
         and build_confirm
     )
-    if st.button("Save as new DB", disabled=not build_ready):
+    if _action_button("Save as new DB", disabled=not build_ready):
         try:
             assert config is not None and selected is not None
             configure_ladybug_home(config)
             target = config.databases_root / f"{name}.lbdb"
-            db_manifest = build_database(
-                dump_path=selected,
-                target=target,
-                database_name=name,
-                space=EmbeddingSpaceIdentity(
-                    provider="ollama",
-                    model=emodel,
-                    model_version=eversion,
-                    dimension=dimension,
+            db_manifest = run_logged_operation(
+                "database_build",
+                lambda: build_database(
+                    dump_path=selected,
+                    target=target,
+                    database_name=name,
+                    space=EmbeddingSpaceIdentity(
+                        provider="ollama",
+                        model=emodel,
+                        model_version=eversion,
+                        dimension=dimension,
+                    ),
+                    vision_provider="ollama",
+                    vision_model=vmodel.strip(),
+                    vision_model_version=vversion.strip(),
                 ),
-                vision_provider="ollama",
-                vision_model=vmodel.strip(),
-                vision_model_version=vversion.strip(),
             )
             st.session_state.active_db = (target, db_manifest)
             st.success("New database built, verified, and selected.")
@@ -728,7 +784,7 @@ def _search(config: UiRuntimeConfig | None) -> None:
     active = _active(config)
     question = st.text_input("Search question")
     base, limit, allow = _search_fields("search")
-    if st.button(
+    if _action_button(
         "Search evidence",
         disabled=config is None or active is None or not question.strip() or not allow,
     ):
@@ -761,7 +817,7 @@ def _search(config: UiRuntimeConfig | None) -> None:
 
 def _chat(config: UiRuntimeConfig | None) -> None:
     st.subheader("Chatbot")
-    if st.button("Clear chat history"):
+    if _action_button("Clear chat history"):
         st.session_state.chat_history = []
     active = _active(config)
     base, limit, allow_embed = _search_fields("chat")
@@ -862,14 +918,15 @@ def _errors(config: UiRuntimeConfig | None) -> None:
         and config.working_root.is_dir()
         and not config.working_root.is_symlink()
     )
-    if st.button("Preview legacy import", disabled=blocked or not available):
+    if _action_button("Preview legacy import", disabled=blocked or not available):
         try:
             assert config is not None
             service = LegacyMigrationService(
                 importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
             )
-            st.session_state.import_result = service.preview(
-                runtime_data_root=config.working_root
+            st.session_state.import_result = run_logged_operation(
+                "legacy_import_preview",
+                lambda: service.preview(runtime_data_root=config.working_root),
             )
         except (ValueError, OSError, RuntimeError):
             _record_error("Legacy import preview failed. No data was published.")
@@ -880,7 +937,7 @@ def _errors(config: UiRuntimeConfig | None) -> None:
         "Exact approved report_id", value="", placeholder="Not pre-approved"
     )
     approve = st.checkbox("I reviewed the exact report and snapshot hash", value=False)
-    if st.button(
+    if _action_button(
         "Approve and publish legacy import",
         disabled=blocked or result is None or not approve or not approved.strip(),
     ):
@@ -890,12 +947,15 @@ def _errors(config: UiRuntimeConfig | None) -> None:
                 importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
             )
             typed = cast(LegacyImportResult, result)
-            manifest = service.publish(
-                result=typed,
-                approved_report_id=approved,
-                dumps_root=config.dumps_root,
-                media_resolver=FilesystemMediaResolver(config.working_root),
-                published_at=datetime.now(UTC),
+            manifest = run_logged_operation(
+                "legacy_import_publication",
+                lambda: service.publish(
+                    result=typed,
+                    approved_report_id=approved,
+                    dumps_root=config.dumps_root,
+                    media_resolver=FilesystemMediaResolver(config.working_root),
+                    published_at=datetime.now(UTC),
+                ),
             )
             dump_path = config.dumps_root / f"dump-{manifest.dump_number:06d}"
             bind_snapshot(st.session_state, typed.snapshot, manifest, dump_path)
