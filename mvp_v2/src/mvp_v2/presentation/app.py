@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,6 +70,19 @@ TAB_LABELS = (
     "Errors/Import report",
 )
 _SAFE_DB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+
+
+def _environment_text(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
+
+
+def _environment_dimension() -> int:
+    raw = os.environ.get("MVP_V2_EMBEDDING_DIMENSION", "768")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 768
+    return value if value > 0 else 768
 
 
 def run() -> None:
@@ -371,15 +385,27 @@ def _relations(config: UiRuntimeConfig | None) -> None:
 
 def _model_fields(prefix: str = "") -> tuple[str, str, str, int]:
     base = st.text_input(
-        "Ollama base URL", "http://127.0.0.1:11434", key=f"{prefix}base"
+        "Ollama base URL",
+        _environment_text("MVP_V2_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        key=f"{prefix}base",
     )
     st.text_input("Provider", "ollama", disabled=True, key=f"{prefix}provider")
-    model = st.text_input("Exact embedding model", key=f"{prefix}embedding_model")
+    model = st.text_input(
+        "Exact embedding model",
+        _environment_text("MVP_V2_EMBEDDING_MODEL"),
+        key=f"{prefix}embedding_model",
+    )
     version = st.text_input(
-        "Exact embedding model version", key=f"{prefix}embedding_version"
+        "Exact embedding model version",
+        _environment_text("MVP_V2_EMBEDDING_MODEL_VERSION"),
+        key=f"{prefix}embedding_version",
     )
     dimension = st.number_input(
-        "Embedding dimension", min_value=1, value=768, step=1, key=f"{prefix}dimension"
+        "Embedding dimension",
+        min_value=1,
+        value=_environment_dimension(),
+        step=1,
+        key=f"{prefix}dimension",
     )
     return base, model.strip(), version.strip(), int(dimension)
 
@@ -442,8 +468,12 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
         if assets
         else None
     )
-    vision_model = st.text_input("Exact vision model")
-    vision_version = st.text_input("Exact vision model version")
+    vision_model = st.text_input(
+        "Exact vision model", _environment_text("MVP_V2_VISION_MODEL")
+    )
+    vision_version = st.text_input(
+        "Exact vision model version", _environment_text("MVP_V2_VISION_MODEL_VERSION")
+    )
     allow_vision = st.checkbox("Authorize this vision operation", value=False)
     if st.button(
         "Describe selected asset",
@@ -575,8 +605,11 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
     base, emodel, eversion, dimension = _model_fields("db_")
     del base
     vmodel, vversion = (
-        st.text_input("DB vision model"),
-        st.text_input("DB vision model version"),
+        st.text_input("DB vision model", _environment_text("MVP_V2_VISION_MODEL")),
+        st.text_input(
+            "DB vision model version",
+            _environment_text("MVP_V2_VISION_MODEL_VERSION"),
+        ),
     )
     build_confirm = st.checkbox("Confirm exact new DB build", value=False)
     build_ready = bool(
@@ -653,7 +686,9 @@ def _with_search(
 
 def _search_fields(prefix: str) -> tuple[str, int, bool]:
     base = st.text_input(
-        "Search Ollama base URL", "http://127.0.0.1:11434", key=f"{prefix}_base"
+        "Search Ollama base URL",
+        _environment_text("MVP_V2_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+        key=f"{prefix}_base",
     )
     limit = int(
         st.number_input(
@@ -709,8 +744,10 @@ def _chat(config: UiRuntimeConfig | None) -> None:
     active = _active(config)
     base, limit, allow_embed = _search_fields("chat")
     model, version = (
-        st.text_input("Exact chat model"),
-        st.text_input("Exact chat model version"),
+        st.text_input("Exact chat model", _environment_text("MVP_V2_CHAT_MODEL")),
+        st.text_input(
+            "Exact chat model version", _environment_text("MVP_V2_CHAT_MODEL_VERSION")
+        ),
     )
     allow_generation = st.checkbox("Authorize answer generation", value=False)
     question = st.chat_input(

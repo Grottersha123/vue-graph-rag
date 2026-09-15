@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -26,10 +27,14 @@ class UiRuntimeConfig(BaseModel):
 def default_runtime_config() -> UiRuntimeConfig:
     runtime = Path(__file__).resolve().parents[3] / "runtime"
     return UiRuntimeConfig(
-        working_root=runtime / "mvp_data",
-        dumps_root=runtime / "dumps",
-        databases_root=runtime / "databases",
-        ladybug_home=runtime / "ladybug-home",
+        working_root=Path(os.environ.get("MVP_V2_WORKING_ROOT", runtime / "mvp_data")),
+        dumps_root=Path(os.environ.get("MVP_V2_DUMPS_ROOT", runtime / "dumps")),
+        databases_root=Path(
+            os.environ.get("MVP_V2_DATABASES_ROOT", runtime / "databases")
+        ),
+        ladybug_home=Path(
+            os.environ.get("MVP_V2_LADYBUG_HOME", runtime / "ladybug-home")
+        ),
     )
 
 

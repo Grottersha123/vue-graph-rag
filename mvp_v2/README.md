@@ -57,22 +57,31 @@ Normal application code only executes `LOAD vector`; it never installs extension
 
 ## Phase 9 local Streamlit UI
 
-From the repository root, create only the explicit local runtime folders, then launch
-the app with the locked environment:
+From the repository root, create the explicit local runtime folders and copy the
+example environment file once:
 
 ```console
 mkdir -p mvp_v2/runtime/{mvp_data,dumps,databases,ladybug-home}
-HOME="$PWD/mvp_v2/runtime/ladybug-home" /tmp/vue-graph-rag-mvp-v2/.venv/bin/streamlit run mvp_v2/streamlit_app.py
+cp mvp_v2/.env.example mvp_v2/.env
 ```
 
-The sidebar accepts only paths confined below `mvp_v2/runtime`. The defaults are
-`runtime/mvp_data`, `runtime/dumps`, `runtime/databases`, and
-`runtime/ladybug-home`. Missing folders, dumps, databases, Ollama, and models are
-reported without startup calls or automatic creation. The UI does not read `.env`,
-does not migrate `mvp/mvp_data`, and does not open a binary database until the
-operator explicitly selects it. Use the same `HOME` for external vector provisioning.
-Ollama must be running on an explicitly configured local HTTP address, and every
-vision, embedding, or generation call requires a fresh explicit authorization.
+Fill in the exact installed Ollama model names, versions, and embedding dimension.
+Then launch through uv while keeping the environment outside the repository:
+
+```console
+UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
+  uv run --project mvp_v2 --env-file mvp_v2/.env \
+  streamlit run mvp_v2/streamlit_app.py
+```
+
+`.env` is ignored; `.env.example` is tracked and contains no secrets. `uv` loads its
+values into the process, and the UI uses them as sidebar/model defaults. The sidebar
+still accepts only paths confined below `mvp_v2/runtime`. Missing folders, dumps,
+databases, Ollama, and models are reported without startup calls or automatic
+creation. The UI does not migrate `mvp/mvp_data` and does not open a native database
+until the operator explicitly selects it. Use the same `MVP_V2_LADYBUG_HOME` for
+external vector provisioning. Every vision, embedding, or generation call still
+requires fresh explicit authorization.
 
 ## Implemented Phase 9 controls
 
