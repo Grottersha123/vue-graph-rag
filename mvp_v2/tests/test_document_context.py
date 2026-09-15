@@ -27,7 +27,9 @@ from mvp_v2.application.manifests import (
     compute_database_build_id,
 )
 from mvp_v2.application.retrieval import SearchService, _hydrate
+from mvp_v2.application.title_backfill import fill_missing_document_titles
 from mvp_v2.domain import graph
+from mvp_v2.domain.graph import Document
 from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
 from mvp_v2.domain.snapshot import GraphSnapshot
 from tests.factories import NOW, SHA, build_valid_snapshot
@@ -322,3 +324,91 @@ def test_output_contracts_allow_multiline_and_reject_blank_or_controls() -> None
 
     with pytest.raises(ValidationError):
         ChatAnswer(answer="", citations=(), evidence=(), generated=True)
+
+
+def test_title_backfill_renames_sha_documents_from_headings() -> None:
+    snapshot = build_valid_snapshot()
+    sha_document = graph.Document(
+        id="doc-sha",
+        title="b" * 64,
+        source_name="",
+        content_format="markdown",
+        source_url="",
+        external_id="",
+        is_active=True,
+    )
+    sha_version = graph.DocumentVersion(
+        id="version-sha",
+        version=1,
+        sha256=SHA,
+        local_path="documents/sha.md",
+        created_at=NOW,
+        is_current=True,
+        error="",
+    )
+    heading_chunk = _chunk("chunk-heading", 0, "# Гайд по ведению телеграма\nТекст")
+    snapshot = snapshot.model_copy(
+        update={
+            "documents": snapshot.documents + (sha_document,),
+            "document_versions": snapshot.document_versions + (sha_version,),
+            "chunks": snapshot.chunks + (heading_chunk,),
+            "has_versions": snapshot.has_versions
+            + (
+                graph.HasVersion.model_validate(
+                    {"from": "doc-sha", "to": "version-sha"}
+                ),
+            ),
+            "has_chunks": snapshot.has_chunks
+            + (
+                graph.HasChunk.model_validate(
+                    {"from": "version-sha", "to": "chunk-heading"}
+                ),
+            ),
+        }
+    )
+
+    updated, renamed = fill_missing_document_titles(snapshot)
+    again, renamed_again = fill_missing_document_titles(updated)
+
+    assert renamed == 1
+    titles = {item.id: item.title for item in updated.documents}
+    assert titles["doc-sha"] == "Гайд по ведению телеграма"
+    assert titles["document"] == "Title"
+    assert renamed_again == 0
+
+
+def test_title_backfill_normalises_tab_in_heading_to_single_line() -> None:
+    snapshot = build_valid_snapshot()
+    tab_heading = _chunk("chunk", 0, "# Гайд\tпо телеграму\nТело")
+    snapshot = snapshot.model_copy(
+        update={
+            "documents": (
+                snapshot.documents[0].model_copy(update={"title": "d" * 64}),
+            ),
+            "chunks": (tab_heading,),
+        }
+    )
+
+    updated, renamed = fill_missing_document_titles(snapshot)
+
+    assert renamed == 1
+    assert updated.documents[0].title == "Гайд по телеграму"
+    Document.model_validate(updated.documents[0].model_dump())
+
+
+def test_title_backfill_falls_back_to_first_line_without_heading() -> None:
+    snapshot = build_valid_snapshot()
+    plain_chunk = _chunk("chunk", 0, "первая строка без решётки\nвторая")
+    snapshot = snapshot.model_copy(
+        update={
+            "documents": (
+                snapshot.documents[0].model_copy(update={"title": "c" * 64}),
+            ),
+            "chunks": (plain_chunk,),
+        }
+    )
+
+    updated, renamed = fill_missing_document_titles(snapshot)
+
+    assert renamed == 1
+    assert updated.documents[0].title == "первая строка без решётки"

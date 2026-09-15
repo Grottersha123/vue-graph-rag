@@ -47,6 +47,7 @@ from mvp_v2.application.relations import RelationKind, RelationService
 from mvp_v2.application.retrieval import SearchService
 from mvp_v2.application.services.migration import LegacyMigrationService
 from mvp_v2.application.services.publication import SnapshotPublicationService
+from mvp_v2.application.title_backfill import fill_missing_document_titles
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
 from mvp_v2.domain.graph import Asset
 from mvp_v2.domain.snapshot import GraphSnapshot
@@ -354,6 +355,29 @@ def _documents(config: UiRuntimeConfig | None) -> None:
                 )
         except (IndexError, TypeError, ValueError):
             _record_error("Selected document could not be previewed.")
+    confirm_titles = st.checkbox(
+        "Fill sha-titled document names from content headings", value=False
+    )
+    if _action_button(
+        "Fill missing document titles",
+        disabled=blocked or not confirm_titles or not snapshot.documents,
+    ):
+        try:
+            updated, renamed = _run_visible_operation(
+                "title_backfill",
+                "Заполнение названий документов… Подождите.",
+                lambda: fill_missing_document_titles(st.session_state.snapshot),
+            )
+            if renamed:
+                mark_snapshot_dirty(st.session_state, updated)
+                st.success(
+                    f"Renamed {renamed} documents from content headings. "
+                    "Publish a dump and rebuild the DB to use them."
+                )
+            else:
+                st.info("No sha-titled documents found.")
+        except (ValueError, OSError, RuntimeError):
+            _record_error("Title backfill failed safely; no titles were changed.")
     st.dataframe(
         [item.model_dump() for item in snapshot.document_versions], width="stretch"
     )
