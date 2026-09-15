@@ -19,6 +19,7 @@ from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_du
 from mvp_v2.adapters.legacy.importer import CsvLegacyImporter
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
+from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
 from mvp_v2.application.chunk_backfill import build_missing_chunks
 from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.document_view import build_document_view
@@ -955,6 +956,13 @@ def _chat(config: UiRuntimeConfig | None) -> None:
             "Exact chat model version", _environment_text("MVP_V2_CHAT_MODEL_VERSION")
         ),
     )
+    if st.session_state.chat_history:
+        st.download_button(
+            "Export chat as Markdown",
+            data=render_chat_markdown(st.session_state.chat_history),
+            file_name=datetime.now().strftime("chat-export-%Y%m%d-%H%M%S.md"),
+            mime="text/markdown",
+        )
     allow_generation = st.checkbox("Authorize answer generation", value=False)
     question = st.chat_input(
         "Ask from retrieved evidence", disabled=config is None or active is None
@@ -1016,11 +1024,32 @@ def _chat(config: UiRuntimeConfig | None) -> None:
                         connection.close()
                     if database is not None:
                         database.close()
-                st.session_state.chat_history.append((question, answer))
+                st.session_state.chat_history.append(
+                    (
+                        question,
+                        answer,
+                        ChatTurnProvenance.capture(
+                            manifest=active[1],
+                            chat_model=model.strip(),
+                            chat_model_version=version.strip(),
+                        ),
+                    )
+                )
             except (ValueError, OSError, RuntimeError, ValidationError):
                 _record_error("Chat failed safely; no unverified answer was added.")
-    for prior_question, answer in st.session_state.chat_history:
+    for prior_question, answer, provenance in st.session_state.chat_history:
         st.write(f"Question: {prior_question}")
+        dump_label = (
+            provenance.source_dump_number
+            if provenance.source_dump_number is not None
+            else "?"
+        )
+        st.caption(
+            f"model={provenance.chat_model or '?'}"
+            f" v{provenance.chat_model_version or '?'}"
+            f" · db={provenance.database_name or '?'}"
+            f" · dump={dump_label}"
+        )
         st.write(answer.answer)
         for citation in answer.citations:
             chunk_label = (
