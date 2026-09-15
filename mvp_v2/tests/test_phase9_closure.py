@@ -318,3 +318,18 @@ def test_configure_ladybug_home_sets_exact_validated_home(
     monkeypatch.delenv("HOME", raising=False)
     configure_ladybug_home(config)
     assert os.environ["HOME"] == str(paths["ladybug-home"].resolve())
+
+
+def test_application_logging_is_idempotent_and_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import logging
+
+    from mvp_v2.presentation import logging as app_logging
+
+    path = tmp_path / "runtime" / "logs" / "app.log"
+    monkeypatch.setattr(app_logging, "application_log_path", lambda: path)
+    path.parent.mkdir(parents=True)
+    path.write_text("2026-09-15T13:00:00+0000 ERROR mvp_v2 database build failed\n")
+    assert "database build failed" in app_logging.read_log_tail()
+    assert logging.getLogger("mvp_v2").name == "mvp_v2"

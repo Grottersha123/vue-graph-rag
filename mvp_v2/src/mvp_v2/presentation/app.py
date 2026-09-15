@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import re
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -58,6 +60,11 @@ from mvp_v2.presentation.controller import (
     scan_database_manifests,
     stage_uploads,
 )
+from mvp_v2.presentation.logging import (
+    application_log_path,
+    configure_application_logging,
+    read_log_tail,
+)
 
 TAB_LABELS = (
     "Upload",
@@ -70,6 +77,7 @@ TAB_LABELS = (
     "Errors/Import report",
 )
 _SAFE_DB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+_LOGGER = logging.getLogger("mvp_v2")
 
 
 def _environment_text(name: str, default: str = "") -> str:
@@ -86,6 +94,10 @@ def _environment_dimension() -> int:
 
 
 def run() -> None:
+    try:
+        configure_application_logging()
+    except (OSError, RuntimeError):
+        pass
     st.set_page_config(page_title="Vue Graph RAG", layout="wide")
     st.title("Vue Graph RAG — local MVP")
     config = _sidebar()
@@ -158,8 +170,18 @@ def _missing(config: UiRuntimeConfig) -> bool:
 
 
 def _record_error(message: str) -> None:
-    st.session_state.errors.append(message)
-    st.error(message)
+    error = sys.exception()
+    if error is None:
+        _LOGGER.warning("operation warning: %s", message)
+        display = message
+    else:
+        _LOGGER.exception("operation failed: %s", message)
+        detail = str(error).replace("\n", " ").replace("\r", " ")[:500]
+        display = f"{message} [{type(error).__name__}: {detail}]"
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    entry = f"{timestamp} {display}"
+    st.session_state.errors.append(entry)
+    st.error(display)
 
 
 def _upload(config: UiRuntimeConfig | None) -> None:
@@ -822,6 +844,19 @@ def _errors(config: UiRuntimeConfig | None) -> None:
     st.subheader("Errors/Import report")
     blocked = _blocked(config)
     st.write(st.session_state.errors or "No operation errors.")
+    st.caption(f"Application log: {application_log_path()}")
+    try:
+        log_tail = read_log_tail()
+    except OSError:
+        log_tail = "Log file cannot be read."
+    if log_tail:
+        st.text_area("Recent application log", log_tail, height=240, disabled=True)
+        st.download_button(
+            "Download current application log",
+            data=log_tail.encode("utf-8"),
+            file_name="mvp-v2-app.log",
+            mime="text/plain",
+        )
     available = (
         config is not None
         and config.working_root.is_dir()
