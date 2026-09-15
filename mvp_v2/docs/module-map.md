@@ -68,3 +68,13 @@ presentation/bootstrap -> application -> domain
 Domain modules never import Streamlit, CSV, filesystem, Ollama, or Ladybug. Adapters
 do not define business policy. Ollama is the only Chatbot provider in the first
 release and there is no cloud fallback.
+
+## Consolidated ingestion/model delivery
+
+- `application/ingestion_contracts.py`: preview/commit and explicit model authorization DTOs.
+- `application/chunking.py`, `application/ingestion.py`: deterministic chunks and immutable version transitions.
+- `application/model_operations.py`: local vision updates and missing/all embedding policy.
+- `ports/ingestion.py`, `ports/models.py`: narrow input, file, vision, embedding, and later-chat generation ports.
+- `adapters/ingestion.py`: UTF-8/HTML/PDF CLI/image extraction.
+- `adapters/filesystem/runtime_store.py`: confined temp-file/rename writes.
+- `adapters/ollama.py`: bounded local-only HTTP and response parsing.

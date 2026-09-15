@@ -35,3 +35,9 @@ temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the ne
 number after the highest valid six-digit dump directory and cleans its failed staging
 directory. It assumes one local Streamlit process; it has no inter-process lock.
 No preview copies data or publishes a dump.
+
+## Offline ingestion and embeddings
+
+`IngestionService` previews URL/PDF/Markdown/HTML/image-collection inputs without mutation, then commits a new immutable `GraphSnapshot` and confined runtime files. Exact `external_id` (or URL when no external ID is supplied) drives document identity. Versions and embedding history are retained.
+
+Local model operations require `ModelAuthorization(allow=True, operation=...)`. Configure exact Ollama model and version values at the application boundary (`TODO-MODEL`); there is no default model or cloud fallback. Asset retrieval embeds the deterministic text `Image description:\n{llm_description}` and requires a nonblank description. Live Ollama/model quality and installed PDF CLI validation remain operator tasks.

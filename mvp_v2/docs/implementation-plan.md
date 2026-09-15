@@ -128,3 +128,9 @@ revalidate historical dumps.
 
 No real runtime copy, dump, database, provider, or UI operation is performed by this
 phase.
+
+## Consolidated former Phases 4–6 — implemented offline
+
+Flow: configured input adapter → mutation-free preview → explicit commit to configured runtime root + immutable snapshot → authorized local vision description → authorized exact-identity embeddings. `missing` skips current exact identity/purpose pairs. `all` retires relevant current embeddings and adds a deterministic generation while keeping history. Calls validate whole batches before snapshot construction.
+
+Remaining operator validation: select and record exact `TODO-MODEL` vision/text model names and versions; ensure one text model/dimension is used for both chunks and asset descriptions; install/check `pdfinfo` and `pdftotext`; run a permitted live Ollama smoke test. No live call or graph dump publication is part of this phase.
