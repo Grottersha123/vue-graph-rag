@@ -155,10 +155,20 @@ def test_chat_retries_once_for_out_of_range_citation() -> None:
     assert "The only allowed citation tokens are: [1]." in model.calls[1]
 
 
+def test_chat_parses_combined_and_nonsense_citation_tokens() -> None:
+    model = SequenceModel(("Ответ [1, 2] и [заметка]",))
+
+    answer = ChatService(Search((evidence(), evidence())), model).answer(
+        request()
+    )
+
+    assert [citation.number for citation in answer.citations] == [1, 2]
+
+
 def test_chat_rejects_persistently_invalid_citation_after_one_retry() -> None:
     model = SequenceModel(("Wrong [15]", "Still wrong [15]"))
 
-    with pytest.raises(ChatError, match="citation is out of range"):
+    with pytest.raises(ChatError, match="cites no valid evidence number"):
         ChatService(Search((evidence(),)), model).answer(request())
 
     assert len(model.calls) == 2

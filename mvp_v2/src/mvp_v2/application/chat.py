@@ -143,19 +143,19 @@ def _citation(number: int, evidence: Evidence) -> Citation:
 
 
 _CITATION_TOKEN = re.compile(r"\[([^\[\]]*)\]")
+_CITATION_DIGITS = re.compile(r"\d+", re.ASCII)
 
 
 def _referenced_numbers(answer: str, evidence_count: int) -> tuple[int, ...]:
-    tokens = _CITATION_TOKEN.findall(answer)
-    if not tokens:
-        raise ChatError("generated answer must cite retrieved evidence")
     ordered: list[int] = []
-    for token in tokens:
-        if not token.isascii() or not token.isdigit() or token.startswith("0"):
-            raise ChatError("generated answer contains a malformed citation")
-        number = int(token)
-        if number < 1 or number > evidence_count:
-            raise ChatError("generated answer citation is out of range")
-        if number not in ordered:
+    for token in _CITATION_TOKEN.findall(answer):
+        for digits in _CITATION_DIGITS.findall(token):
+            number = int(digits)
+            if digits.startswith("0"):
+                continue
+            if number < 1 or number > evidence_count or number in ordered:
+                continue
             ordered.append(number)
+    if not ordered:
+        raise ChatError("generated answer cites no valid evidence number")
     return tuple(ordered)
