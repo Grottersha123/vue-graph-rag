@@ -32,8 +32,8 @@ mvp_v2/src/mvp_v2/
     filesystem/
       media.py               confined resolver for graph-referenced files
       dumps.py               single-process immutable numbered dump writer
-    ollama/                  local vision, embedding and chat adapters
-    ladybug/                 graph load, ANN index and retrieval
+    ollama.py                local vision and embedding adapter
+    ladybug.py               graph load, ANN index and retrieval
   presentation/
     streamlit/               pages, components and session-state controllers
   bootstrap/                 configuration and dependency composition
@@ -51,7 +51,7 @@ Tests mirror these responsibilities under `mvp_v2/tests/`.
 | 4. Text ingestion | `domain/chunking.py`, ingestion service, document adapters | Python implementer |
 | 5. Images and vision | filesystem adapter, vision port, `adapters/ollama/vision.py`, asset service | AI implementer |
 | 6. Embeddings | embedding port, planning/service, `adapters/ollama/embedding.py` | AI implementer |
-| 7. Ladybug and search | `adapters/ladybug/`, search service | Python + AI implementers |
+| 7. Ladybug and search | `adapters/ladybug.py`, search service | Python + AI implementers |
 | 8. Deletion | pure deletion planner and publication service | Python implementer |
 | 9. Local Chatbot and UI | `adapters/ollama/chat.py`, Chatbot service, `presentation/streamlit/`, `bootstrap/` | AI + Python implementers |
 | 10. Release checks | mirrored tests and opt-in integration probes | Python + AI reviewers |
@@ -78,3 +78,10 @@ release and there is no cloud fallback.
 - `adapters/ingestion.py`: UTF-8/HTML/PDF CLI/image extraction.
 - `adapters/filesystem/runtime_store.py`: confined temp-file/rename writes.
 - `adapters/ollama.py`: bounded local-only HTTP and response parsing.
+
+- `application/projection.py`: deterministic current-active one-space database projection.
+- `adapters/ladybug.py`: lazy Ladybug build and fixed-index ANN adapter (`LOAD`, never install).
+- `application/retrieval.py`: authorized local embedding search and typed citation hydration.
+- `application/deletion.py`: pure preview/apply cascade and version promotion policy.
+- `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
+- `bootstrap/provision_vector.py`: explicit, confirmed external extension provisioning only.

@@ -5,6 +5,7 @@ from typing import Annotated
 
 from pydantic import BeforeValidator, Field, model_validator
 
+from mvp_v2.application.ingestion_contracts import ModelAuthorization
 from mvp_v2.domain.base import ContractModel, EntityId, FiniteVector, NonBlankText
 
 PositiveInt = Annotated[int, Field(strict=True, ge=1, le=9_223_372_036_854_775_807)]
@@ -103,3 +104,29 @@ class EmbeddingBuildRequest(ContractModel):
         if not self.subjects:
             raise ValueError("embedding build requires at least one subject")
         return self
+
+
+class Evidence(ContractModel):
+    subject: SubjectRef
+    embedding_id: EntityId
+    score: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+    text: NonBlankText
+    document_id: EntityId
+    document_title: NonBlankText
+    source_url: str
+    version_id: EntityId
+    version: PositiveInt
+    local_path: str
+    source_type: NonBlankText
+    statuses: tuple[NonBlankText, ...]
+    roles: tuple[NonBlankText, ...]
+    processes: tuple[NonBlankText, ...]
+    linked_document_ids: tuple[EntityId, ...]
+
+
+class SearchRequest(ContractModel):
+    question: NonBlankText
+    space: EmbeddingSpaceIdentity
+    purposes: tuple[EmbeddingPurposeValue, ...]
+    limit: Annotated[int, Field(strict=True, ge=1, le=100)]
+    authorization: ModelAuthorization
