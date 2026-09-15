@@ -53,3 +53,41 @@ Vector provisioning is an explicit operator-only network side effect. Run it onc
 ```
 
 Normal application code only executes `LOAD vector`; it never installs extensions. Ordinary uploads do not build a database. Only confirmed deletion orchestration may immediately build a replacement. Physical source/media files are reported, never deleted.
+
+
+## Phase 9 local Streamlit UI
+
+From the repository root, create only the explicit local runtime folders, then launch
+the app with the locked environment:
+
+```console
+mkdir -p mvp_v2/runtime/{mvp_data,dumps,databases,ladybug-home}
+HOME="$PWD/mvp_v2/runtime/ladybug-home" /tmp/vue-graph-rag-mvp-v2/.venv/bin/streamlit run mvp_v2/streamlit_app.py
+```
+
+The sidebar accepts only paths confined below `mvp_v2/runtime`. The defaults are
+`runtime/mvp_data`, `runtime/dumps`, `runtime/databases`, and
+`runtime/ladybug-home`. Missing folders, dumps, databases, Ollama, and models are
+reported without startup calls or automatic creation. The UI does not read `.env`,
+does not migrate `mvp/mvp_data`, and does not open a binary database until the
+operator explicitly selects it. Use the same `HOME` for external vector provisioning.
+Ollama must be running on an explicitly configured local HTTP address, and every
+vision, embedding, or generation call requires a fresh explicit authorization.
+
+## Implemented Phase 9 controls
+
+The eight-tab UI wires ingestion preview/commit, document views and deletion preview,
+relation edits, chunk/asset/embedding history, authorized local Ollama embedding and
+vision operations, canonical dump load/publication, manifest-only database discovery
+and explicit builds, authorized evidence search, and session-only cited chat. Invalid
+or out-of-runtime sidebar paths block every operation; action code never falls back to
+default paths. Database artifacts are scanned through their canonical internal manifest
+without opening `database.lbug`, and only an explicit search/chat/build action lazily
+imports Ladybug. Database and model operations never run during render.
+
+Deletion confirmation requires an exact preview, a clean snapshot bound to the selected
+canonical dump, and its nonstale active database. It publishes the validated deleted
+snapshot before building a replacement. A failed replacement leaves the new snapshot
+clean and published while the old database stays stale and unselectable. Physical media
+is never deleted.
+All model providers are fixed to local Ollama; cloud fallback is not supported.

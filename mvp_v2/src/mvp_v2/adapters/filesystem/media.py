@@ -37,6 +37,19 @@ class FilesystemMediaResolver(MediaResolver):
             )
         return MediaVerification(status="verified")
 
+    def read_verified(self, relative_path: str, expected_sha256: str) -> bytes:
+        verification = self.verify(relative_path, expected_sha256)
+        if verification.status != "verified":
+            raise MediaVerificationError("media integrity verification failed")
+        path = _confined_path(self._root, relative_path)
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise MediaVerificationError("media could not be read") from error
+        if hashlib.sha256(content).hexdigest() != expected_sha256:
+            raise MediaVerificationError("media changed during verification")
+        return content
+
 
 def _confined_path(root: Path, relative: str) -> Path:
     if "\\" in relative:

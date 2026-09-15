@@ -5,7 +5,9 @@ description = "Local Streamlit multimodal Graph RAG"
 requires-python = ">=3.11"
 dependencies = [
     "ladybug==0.19.1",
+    "pillow==12.3.0",
     "pydantic>=2.13.5",
+    "streamlit==1.63.0",
 ]
 
 [dependency-groups]

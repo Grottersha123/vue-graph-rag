@@ -35,7 +35,8 @@ mvp_v2/src/mvp_v2/
     ollama.py                local vision and embedding adapter
     ladybug.py               graph load, ANN index and retrieval
   presentation/
-    streamlit/               pages, components and session-state controllers
+    app.py                   eight-tab Streamlit composition and click gates
+    controller.py            safe upload/config and manifest-only scan helpers
   bootstrap/                 configuration and dependency composition
 ```
 
@@ -53,7 +54,7 @@ Tests mirror these responsibilities under `mvp_v2/tests/`.
 | 6. Embeddings | embedding port, planning/service, `adapters/ollama/embedding.py` | AI implementer |
 | 7. Ladybug and search | `adapters/ladybug.py`, search service | Python + AI implementers |
 | 8. Deletion | pure deletion planner and publication service | Python implementer |
-| 9. Local Chatbot and UI | `adapters/ollama/chat.py`, Chatbot service, `presentation/streamlit/`, `bootstrap/` | AI + Python implementers |
+| 9. Local Chatbot and UI | `adapters/ollama.py`, Chatbot service, `presentation/app.py, presentation/controller.py`, `bootstrap/` | AI + Python implementers |
 | 10. Release checks | mirrored tests and opt-in integration probes | Python + AI reviewers |
 
 ## Dependency direction
@@ -84,4 +85,6 @@ release and there is no cloud fallback.
 - `application/retrieval.py`: authorized local embedding search and typed citation hydration.
 - `application/deletion.py`: pure preview/apply cascade and version promotion policy.
 - `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
+- `application/services/publication.py`: graph, media, and version-file publication gate.
+- `presentation/controller.py`: upload limits/cleanup, exact snapshot/dump binding, and UI deletion adapters.
 - `bootstrap/provision_vector.py`: explicit, confirmed external extension provisioning only.

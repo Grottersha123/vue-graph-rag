@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-import mimetypes
+import http.client
+import ipaddress
 import shutil
+import socket
+import ssl
 import subprocess
 import tempfile
+import typing
 from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
+
+from PIL import Image, UnidentifiedImageError
 
 from mvp_v2.application.ingestion_contracts import (
     ExtractedAsset,
@@ -18,6 +26,198 @@ from mvp_v2.ports.ingestion import UrlFetcher
 
 class ExtractionError(RuntimeError):
     pass
+
+
+class _ConnectionFactory(typing.Protocol):
+    def __call__(
+        self,
+        scheme: str,
+        address: str,
+        port: int,
+        hostname: str,
+        timeout: float,
+    ) -> http.client.HTTPConnection: ...
+
+
+class _PinnedHttpConnection(http.client.HTTPConnection):
+    def __init__(self, hostname: str, address: str, port: int, timeout: float) -> None:
+        super().__init__(hostname, port, timeout=timeout)
+        self._address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._address, self.port), self.timeout)
+
+
+class _PinnedHttpsConnection(http.client.HTTPSConnection):
+    def __init__(self, hostname: str, address: str, port: int, timeout: float) -> None:
+        ssl_context = ssl.create_default_context()
+        super().__init__(hostname, port, timeout=timeout, context=ssl_context)
+        self._address = address
+        self._ssl_context = ssl_context
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((self._address, self.port), self.timeout)
+        try:
+            self.sock = self._ssl_context.wrap_socket(
+                raw_socket, server_hostname=self.host
+            )
+        except (OSError, ValueError):
+            raw_socket.close()
+            raise
+
+
+def _create_connection(
+    scheme: str,
+    address: str,
+    port: int,
+    hostname: str,
+    timeout: float,
+) -> http.client.HTTPConnection:
+    if scheme == "https":
+        return _PinnedHttpsConnection(hostname, address, port, timeout)
+    return _PinnedHttpConnection(hostname, address, port, timeout)
+
+
+def _resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    records = socket.getaddrinfo(
+        hostname, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+    )
+    return tuple(dict.fromkeys(typing.cast(str, record[4][0]) for record in records))
+
+
+class PublicHttpUrlFetcher:
+    """Fetch bounded public HTTP(S) content without DNS rebinding exposure."""
+
+    _REDIRECT_CODES: typing.Final = frozenset({301, 302, 303, 307, 308})
+    _CONTENT_TYPES: typing.Final = frozenset({"text/html", "text/plain"})
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 15.0,
+        max_bytes: int = 20_000_000,
+        max_redirects: int = 5,
+        resolver: typing.Callable[[str, int], tuple[str, ...]] = _resolve_addresses,
+        connection_factory: _ConnectionFactory = _create_connection,
+    ) -> None:
+        self._timeout = timeout_seconds
+        self._max_bytes = max_bytes
+        self._max_redirects = max_redirects
+        self._resolver = resolver
+        self._connection_factory = connection_factory
+
+    def fetch(self, url: str) -> tuple[bytes, str]:
+        current_url = url
+        for redirect_count in range(self._max_redirects + 1):
+            scheme, hostname, port, target = self._validate_url(current_url)
+            addresses = self._resolve_public(hostname, port)
+            connection = self._connection_factory(
+                scheme, addresses[0], port, hostname, self._timeout
+            )
+            try:
+                connection.request(
+                    "GET",
+                    target,
+                    headers={"Host": self._host_header(hostname, port, scheme)},
+                )
+                response = connection.getresponse()
+                if response.status in self._REDIRECT_CODES:
+                    location = response.getheader("Location")
+                    response.close()
+                    if location is None or redirect_count == self._max_redirects:
+                        raise ExtractionError(
+                            "URL redirect is invalid or exceeds limit"
+                        )
+                    current_url = urljoin(current_url, location)
+                    continue
+                if not 200 <= response.status < 300:
+                    raise ExtractionError("URL server returned an unsupported status")
+                content_type = response.getheader("Content-Type")
+                media_type = (
+                    content_type.split(";", 1)[0].strip().lower()
+                    if content_type
+                    else ""
+                )
+                if media_type not in self._CONTENT_TYPES:
+                    raise ExtractionError("URL response content type is unsupported")
+                content = self._read_bounded(response)
+                return content, media_type
+            except ExtractionError:
+                raise
+            except (OSError, http.client.HTTPException, ssl.SSLError) as error:
+                raise ExtractionError("public URL fetch failed") from error
+            finally:
+                connection.close()
+        raise ExtractionError("URL redirect exceeds limit")
+
+    def _resolve_public(self, hostname: str, port: int) -> tuple[str, ...]:
+        try:
+            addresses = self._resolver(hostname, port)
+            parsed_addresses = tuple(ipaddress.ip_address(item) for item in addresses)
+        except (OSError, ValueError) as error:
+            raise ExtractionError("public URL host cannot be resolved") from error
+        if not parsed_addresses or any(
+            address.is_loopback
+            or address.is_private
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+            for address in parsed_addresses
+        ):
+            raise ExtractionError("URL host is not public")
+        return tuple(str(address) for address in parsed_addresses)
+
+    @staticmethod
+    def _validate_url(url: str) -> tuple[str, str, int, str]:
+        if not url or url != url.strip() or any(ord(char) < 32 for char in url):
+            raise ExtractionError("URL is invalid")
+        try:
+            parsed = urlsplit(url)
+            port = parsed.port
+            hostname = parsed.hostname
+        except ValueError as error:
+            raise ExtractionError("URL is invalid") from error
+        scheme = parsed.scheme.lower()
+        expected_port = 80 if scheme == "http" else 443 if scheme == "https" else None
+        if (
+            expected_port is None
+            or hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or (port is not None and port != expected_port)
+        ):
+            raise ExtractionError("URL is invalid")
+        try:
+            ascii_hostname = hostname.encode("idna").decode("ascii").lower()
+        except UnicodeError as error:
+            raise ExtractionError("URL hostname is invalid") from error
+        if not ascii_hostname or len(ascii_hostname) > 253:
+            raise ExtractionError("URL hostname is invalid")
+        target = parsed.path or "/"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        return scheme, ascii_hostname, expected_port, target
+
+    def _read_bounded(self, response: http.client.HTTPResponse) -> bytes:
+        chunks: list[bytes] = []
+        total = 0
+        while chunk := response.read(min(64 * 1024, self._max_bytes - total + 1)):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > self._max_bytes:
+                raise ExtractionError("URL response exceeds configured limit")
+        return b"".join(chunks)
+
+    @staticmethod
+    def _host_header(hostname: str, port: int, scheme: str) -> str:
+        del port, scheme
+        return f"[{hostname}]" if ":" in hostname else hostname
+
+
+# Backward-compatible name used by the existing application composition.
+LocalHttpUrlFetcher = PublicHttpUrlFetcher
 
 
 class _ReadableHtml(HTMLParser):
@@ -133,10 +333,37 @@ class LocalInputExtractor:
             raise ExtractionError("image symlinks are refused")
         raw = self._read(path)
         self._bounded(raw)
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        if not mime.startswith("image/"):
-            raise ExtractionError("image collection contains a non-image file")
+        mime = self._validated_image_mime(raw)
         return ExtractedAsset(name=path.name, content=raw, mime_type=mime)
+
+    @staticmethod
+    def _validated_image_mime(raw: bytes) -> str:
+        formats = {
+            "PNG": "image/png",
+            "JPEG": "image/jpeg",
+            "GIF": "image/gif",
+            "WEBP": "image/webp",
+        }
+        try:
+            with Image.open(BytesIO(raw)) as image:
+                image_format = image.format
+                width, height = image.size
+                if width < 1 or height < 1 or width * height > 40_000_000:
+                    raise ExtractionError("image dimensions are unsupported")
+                image.verify()
+        except ExtractionError:
+            raise
+        except (
+            Image.DecompressionBombError,
+            OSError,
+            SyntaxError,
+            UnidentifiedImageError,
+        ) as error:
+            raise ExtractionError("image content is invalid or unsupported") from error
+        mime = formats.get(image_format or "")
+        if mime is None:
+            raise ExtractionError("image content is invalid or unsupported")
+        return mime
 
     def _pdf_text(self, path: Path) -> str:
         if shutil.which("pdfinfo") is None or shutil.which("pdftotext") is None:

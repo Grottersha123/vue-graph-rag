@@ -385,9 +385,15 @@ def test_explicit_process_role_relations_and_same_token_rebuild_denied() -> None
 
 
 def test_image_manifest_excludes_raw_bytes(tmp_path: Path) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
     collection = tmp_path / "images"
     collection.mkdir()
-    raw = b"\x89PNG raw secret bytes"
+    output = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(output, format="PNG")
+    raw = output.getvalue()
     (collection / "a.png").write_bytes(raw)
     extracted = LocalInputExtractor(tmp_path).extract(
         request("image_collection").model_copy(update={"input_path": "images"})
