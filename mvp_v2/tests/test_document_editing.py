@@ -15,9 +15,21 @@ def test_document_summary_combines_document_and_current_version() -> None:
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.document.id == "document"
+    assert summary.version is not None
     assert summary.version.id == "version"
     assert summary.chunk_count == 1
     assert summary.asset_count == 1
+
+
+def test_document_summary_keeps_document_without_current_version() -> None:
+    snapshot = build_valid_snapshot().model_copy(update={"has_versions": ()})
+
+    summary = build_document_summaries(snapshot)[0]
+
+    assert summary.document.id == "document"
+    assert summary.version is None
+    assert summary.chunk_count == 0
+    assert summary.asset_count == 0
 
 
 def test_rename_document_normalizes_title_without_mutating_input() -> None:

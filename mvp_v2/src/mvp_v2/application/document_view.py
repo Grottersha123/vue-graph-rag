@@ -9,7 +9,7 @@ from mvp_v2.domain.snapshot import GraphSnapshot
 @dataclass(frozen=True, slots=True)
 class DocumentSummary:
     document: Document
-    version: DocumentVersion
+    version: DocumentVersion | None
     chunk_count: int
     asset_count: int
 
@@ -29,13 +29,12 @@ def build_document_summaries(snapshot: GraphSnapshot) -> tuple[DocumentSummary, 
         for version in snapshot.document_versions
         if version.is_current
     }
-    version_id_by_document: dict[str, str] = {}
+    version_ids_by_document: dict[str, list[str]] = {}
     for version_edge in snapshot.has_versions:
-        if version_edge.target_id not in current_versions:
-            continue
-        if version_edge.source_id in version_id_by_document:
-            raise ValueError("document must have exactly one current version")
-        version_id_by_document[version_edge.source_id] = version_edge.target_id
+        if version_edge.target_id in current_versions:
+            version_ids_by_document.setdefault(version_edge.source_id, []).append(
+                version_edge.target_id
+            )
     chunk_counts: dict[str, int] = {}
     for chunk_edge in snapshot.has_chunks:
         chunk_counts[chunk_edge.source_id] = (
@@ -49,15 +48,19 @@ def build_document_summaries(snapshot: GraphSnapshot) -> tuple[DocumentSummary, 
 
     summaries: list[DocumentSummary] = []
     for document in snapshot.documents:
-        version = current_versions.get(version_id_by_document.get(document.id, ""))
-        if version is None:
-            raise ValueError("document must have exactly one current version")
+        candidates = (
+            current_versions[version_id]
+            for version_id in version_ids_by_document.get(document.id, ())
+        )
+        version = max(
+            candidates, key=lambda item: (item.version, item.id), default=None
+        )
         summaries.append(
             DocumentSummary(
                 document=document,
                 version=version,
-                chunk_count=chunk_counts.get(version.id, 0),
-                asset_count=asset_counts.get(version.id, 0),
+                chunk_count=0 if version is None else chunk_counts.get(version.id, 0),
+                asset_count=0 if version is None else asset_counts.get(version.id, 0),
             )
         )
     return tuple(summaries)

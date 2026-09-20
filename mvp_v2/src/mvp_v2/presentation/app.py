@@ -358,6 +358,10 @@ def _upload(config: UiRuntimeConfig | None) -> None:
 
 
 def _render_document_preview(snapshot: GraphSnapshot, summary: DocumentSummary) -> None:
+    if summary.version is None:
+        with st.expander(f"Preview: {summary.document.title}", expanded=False):
+            st.warning("This document has no linked current version in the snapshot.")
+        return
     try:
         view = build_document_view(snapshot, summary.document.id)
         with st.expander(f"Preview: {summary.document.title}", expanded=False):
@@ -574,8 +578,9 @@ def _documents(config: UiRuntimeConfig | None) -> None:
                 "id": item.document.id,
                 "title": item.document.title,
                 "format": item.document.content_format,
-                "source": item.document.source_url or item.version.local_path,
-                "version": item.version.version,
+                "source": item.document.source_url
+                or ("" if item.version is None else item.version.local_path),
+                "version": None if item.version is None else item.version.version,
                 "chunks": item.chunk_count,
                 "assets": item.asset_count,
                 "active": item.document.is_active,
@@ -868,9 +873,7 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
             dump_manifest = _run_visible_operation(
                 "dump_publication",
                 "Публикация snapshot… Подождите.",
-                lambda: SnapshotPublicationService(
-                    FilesystemDumpRepository()
-                ).publish(
+                lambda: SnapshotPublicationService(FilesystemDumpRepository()).publish(
                     dumps_root=config.dumps_root,
                     snapshot=st.session_state.snapshot,
                     published_at=datetime.now(UTC),
