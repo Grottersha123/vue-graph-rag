@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import ipaddress
+import re
 import shutil
 import socket
 import ssl
@@ -12,7 +13,7 @@ import typing
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 
@@ -253,6 +254,15 @@ def html_text(raw: bytes) -> str:
 
 
 class LocalInputExtractor:
+    _MARKDOWN_IMAGE: typing.Final = re.compile(
+        r"!\[[^]\n]*\]\((?P<target>[^)\s]+)\)"
+    )
+    _HTTP_URL_START: typing.Final = re.compile(r"https?://", re.IGNORECASE)
+    _MAX_MARKDOWN_ASSETS: typing.Final = 32
+    _MAX_MARKDOWN_URLS: typing.Final = 256
+    _MAX_MARKDOWN_URL_CHARS: typing.Final = 4_096
+    _MAX_MARKDOWN_URL_TOTAL_CHARS: typing.Final = 65_536
+
     def __init__(
         self,
         input_root: Path,
@@ -301,11 +311,89 @@ class LocalInputExtractor:
                 content=raw, text=self._pdf_text(path), extension=".pdf"
             )
         suffix = ".md" if request.kind == "markdown" else ".html"
+        text = html_text(raw) if request.kind == "html" else self._utf8(raw)
+        is_markdown = request.kind == "markdown"
+        assets = self._markdown_assets(path, text) if is_markdown else ()
+        downloadable_urls = self._markdown_http_urls(text) if is_markdown else ()
         return ExtractedInput(
             content=raw,
-            text=html_text(raw) if request.kind == "html" else self._utf8(raw),
+            text=text,
             extension=suffix,
+            assets=assets,
+            downloadable_urls=downloadable_urls,
         )
+
+    def _markdown_assets(
+        self, markdown_path: Path, markdown_text: str
+    ) -> tuple[ExtractedAsset, ...]:
+        assets: list[ExtractedAsset] = []
+        asset_names: set[str] = set()
+        for match in self._MARKDOWN_IMAGE.finditer(markdown_text):
+            target = unquote(match.group("target"))
+            parsed_target = urlsplit(target)
+            if parsed_target.scheme:
+                continue
+            asset_name = Path(parsed_target.path).name
+            if not asset_name or asset_name in asset_names:
+                continue
+            asset_path = markdown_path.parent / asset_name
+            if not asset_path.exists() and not asset_path.is_symlink():
+                continue
+            if len(assets) >= self._MAX_MARKDOWN_ASSETS:
+                raise ExtractionError("markdown image count exceeds limit")
+            asset_names.add(asset_name)
+            assets.append(self._asset(asset_path))
+        return tuple(assets)
+
+    def _markdown_http_urls(self, markdown_text: str) -> tuple[str, ...]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        total_characters = 0
+        position = 0
+        while match := self._HTTP_URL_START.search(markdown_text, position):
+            target, position = self._http_url_at(markdown_text, match.start())
+            try:
+                hostname = urlsplit(target).hostname
+            except ValueError:
+                hostname = None
+            if hostname is not None and target not in seen:
+                if (
+                    len(urls) >= self._MAX_MARKDOWN_URLS
+                    or total_characters + len(target)
+                    > self._MAX_MARKDOWN_URL_TOTAL_CHARS
+                ):
+                    raise ExtractionError("markdown URL preview exceeds limit")
+                seen.add(target)
+                urls.append(target)
+                total_characters += len(target)
+        return tuple(urls)
+
+    @classmethod
+    def _http_url_at(cls, markdown_text: str, start: int) -> tuple[str, int]:
+        characters: list[str] = []
+        parenthesis_depth = 0
+        position = start
+        while position < len(markdown_text):
+            character = markdown_text[position]
+            if character == "\\" and position + 1 < len(markdown_text):
+                if len(characters) >= cls._MAX_MARKDOWN_URL_CHARS:
+                    raise ExtractionError("markdown URL preview exceeds limit")
+                characters.append(markdown_text[position + 1])
+                position += 2
+                continue
+            if character == "(":
+                parenthesis_depth += 1
+            elif character == ")":
+                if parenthesis_depth == 0:
+                    break
+                parenthesis_depth -= 1
+            elif character.isspace() or character in "<>":
+                break
+            if len(characters) >= cls._MAX_MARKDOWN_URL_CHARS:
+                raise ExtractionError("markdown URL preview exceeds limit")
+            characters.append(character)
+            position += 1
+        return "".join(characters), position
 
     def _safe_input(self, relative: str) -> Path:
         if not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:

@@ -27,14 +27,18 @@ from mvp_v2.application.dto.deletion import (
 )
 from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.ingestion import IngestionService
-from mvp_v2.application.ingestion_contracts import IngestionPreview, IngestionRequest
+from mvp_v2.application.ingestion_contracts import (
+    IngestionPreview,
+    IngestionRequest,
+    SourceKind,
+)
 from mvp_v2.application.manifests import DATABASE_FORMAT, DatabaseManifest, DumpManifest
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
 
-_SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_NAME = re.compile(r"(?![.-])(?!.*\.\.)[^/\\\x00-\x1f\x7f-\x9f]{1,128}\Z")
 _MAX_UPLOAD_FILES = 32
 _MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024
 _MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024
@@ -45,6 +49,26 @@ class UploadValue(Protocol):
     @property
     def name(self) -> str: ...
     def getvalue(self) -> bytes: ...
+
+
+def primary_upload_name(kind: SourceKind, uploads: tuple[UploadValue, ...]) -> str:
+    if kind == "url":
+        raise ValueError("URL input does not use local uploads")
+    if kind == "image_collection":
+        return "."
+    expected_suffixes = {
+        "markdown": {".md"},
+        "pdf": {".pdf"},
+        "html": {".html", ".htm"},
+    }[kind]
+    candidates = tuple(
+        upload.name
+        for upload in uploads
+        if Path(upload.name).suffix.lower() in expected_suffixes
+    )
+    if len(candidates) != 1:
+        raise ValueError(f"{kind} upload requires exactly one primary file")
+    return candidates[0]
 
 
 def stage_uploads(working_root: Path, uploads: tuple[UploadValue, ...]) -> Path:

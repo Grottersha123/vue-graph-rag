@@ -22,11 +22,17 @@ from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
 from mvp_v2.application.chunk_backfill import build_missing_chunks
 from mvp_v2.application.deletion import preview_deletion
-from mvp_v2.application.document_view import build_document_view
+from mvp_v2.application.document_editing import rename_document
+from mvp_v2.application.document_view import (
+    DocumentSummary,
+    build_document_summaries,
+    build_document_view,
+)
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
     DatabaseIdentity,
     DeletionCommand,
+    DeletionImpact,
     GraphNodeRef,
 )
 from mvp_v2.application.dto.importing import LegacyImportResult
@@ -62,6 +68,7 @@ from mvp_v2.presentation.controller import (
     mark_snapshot_dirty,
     parse_runtime_config,
     preview_ingestion,
+    primary_upload_name,
     remove_staging_directory,
     scan_database_manifests,
     stage_uploads,
@@ -210,6 +217,14 @@ def _record_error(message: str) -> None:
     st.error(display)
 
 
+def _preferred_option_index(options: dict[str, str], preferred: str) -> int:
+    preferred_key = preferred.casefold()
+    for index, (identifier, label) in enumerate(options.items(), start=1):
+        if identifier.casefold() == preferred_key or label.casefold() == preferred_key:
+            return index
+    return 0
+
+
 def _upload(config: UiRuntimeConfig | None) -> None:
     st.subheader("Upload")
     blocked = _blocked(config)
@@ -220,6 +235,8 @@ def _upload(config: UiRuntimeConfig | None) -> None:
     )
     source_types = {item.id: item.code for item in snapshot.source_types}
     statuses = {item.id: item.name for item in snapshot.statuses}
+    processes = {item.id: item.name for item in snapshot.processes}
+    roles = {item.id: item.name for item in snapshot.roles}
     source_type_id = (
         st.selectbox(
             "SourceType",
@@ -238,10 +255,31 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         if statuses
         else None
     )
+    process_id = st.selectbox(
+        "Process (optional)",
+        ("", *processes),
+        index=_preferred_option_index(processes, "onboarding"),
+        format_func=lambda value: processes.get(value, "Not selected"),
+    )
+    role_id = st.selectbox(
+        "Role (optional)",
+        ("", *roles),
+        index=_preferred_option_index(roles, "student"),
+        format_func=lambda value: roles.get(value, "Not selected"),
+    )
     title = st.text_input("Title")
     external_id = st.text_input("Existing/new identity (external_id)")
-    source_url = st.text_input("Public HTTP(S) URL")
-    uploads = st.file_uploader("Local input", accept_multiple_files=True)
+    source_url_label = (
+        "Public HTTP(S) URL (required)"
+        if kind == "url"
+        else "Source URL (optional provenance)"
+    )
+    source_url = st.text_input(source_url_label)
+    uploads = (
+        st.file_uploader("Local input", accept_multiple_files=True)
+        if kind != "url"
+        else None
+    )
     valid = bool(
         title.strip()
         and source_type_id
@@ -253,10 +291,9 @@ def _upload(config: UiRuntimeConfig | None) -> None:
             assert config is not None
             input_root, input_path = config.working_root, ""
             if kind != "url":
-                input_root = stage_uploads(config.working_root, tuple(uploads or ()))
-                input_path = (
-                    "." if kind == "image_collection" else tuple(uploads)[0].name
-                )
+                local_uploads = tuple(uploads or ())
+                input_path = primary_upload_name(cast(SourceKind, kind), local_uploads)
+                input_root = stage_uploads(config.working_root, local_uploads)
             request = IngestionRequest(
                 kind=cast(SourceKind, kind),
                 title=title,
@@ -265,6 +302,8 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 status_id=cast(str, status_id),
                 source_url=source_url,
                 input_path=input_path,
+                process_id=process_id or None,
+                role_id=role_id or None,
             )
             try:
                 st.session_state.preview = _run_visible_operation(
@@ -293,6 +332,10 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 "assets": len(preview.extracted.assets),
             }
         )
+        if preview.extracted.downloadable_urls:
+            st.markdown("#### Potential downloads")
+            for url in preview.extracted.downloadable_urls:
+                st.link_button(url, url)
     if _action_button("Commit", disabled=blocked or missing or preview is None):
         try:
             assert config is not None
@@ -314,30 +357,16 @@ def _upload(config: UiRuntimeConfig | None) -> None:
             )
 
 
-def _documents(config: UiRuntimeConfig | None) -> None:
-    st.subheader("Documents")
-    blocked = _blocked(config)
-    snapshot = st.session_state.snapshot
-    document_rows = [item.model_dump() for item in snapshot.documents]
-    document_event = st.dataframe(
-        document_rows,
-        key="documents_table",
-        on_select="rerun",
-        selection_mode="single-row",
-        width="stretch",
-    )
-    selected_rows = cast(Any, document_event).selection.rows
-    if selected_rows:
-        try:
-            document_id = snapshot.documents[int(selected_rows[0])].id
-            view = build_document_view(snapshot, document_id)
-            st.markdown(f"### Preview: {view.document.title}")
+def _render_document_preview(snapshot: GraphSnapshot, summary: DocumentSummary) -> None:
+    try:
+        view = build_document_view(snapshot, summary.document.id)
+        with st.expander(f"Preview: {summary.document.title}", expanded=False):
             st.json(
                 {
-                    "document_id": view.document.id,
+                    "document_id": summary.document.id,
                     "version": view.version.version,
-                    "format": view.document.content_format,
-                    "source": view.document.source_url or view.version.local_path,
+                    "format": summary.document.content_format,
+                    "source": summary.document.source_url or view.version.local_path,
                     "chunks": view.chunk_count,
                     "assets": len(view.assets),
                 }
@@ -347,71 +376,124 @@ def _documents(config: UiRuntimeConfig | None) -> None:
             else:
                 st.info("This document has no indexed text content.")
             if view.assets:
-                st.dataframe(
-                    [
-                        asset.model_dump(exclude={"llm_description"})
-                        for asset in view.assets
-                    ],
-                    width="stretch",
-                )
-        except (IndexError, TypeError, ValueError):
-            _record_error("Selected document could not be previewed.")
-    confirm_titles = st.checkbox(
-        "Fill sha-titled document names from content headings", value=False
+                st.markdown("#### Assets")
+                st.json([asset.model_dump(mode="json") for asset in view.assets])
+    except (TypeError, ValueError):
+        _record_error("Selected document could not be previewed.")
+
+
+def _render_document_actions(
+    *, blocked: bool, snapshot: GraphSnapshot, summary: DocumentSummary
+) -> None:
+    document = summary.document
+    st.markdown("#### Selected document actions")
+    title_column, source_column = st.columns(2)
+    with title_column:
+        edited_title = st.text_input(
+            "Document title",
+            value=document.title,
+            key=f"document_title_{document.id}",
+        )
+        if _action_button("Save title", disabled=blocked or not edited_title.strip()):
+            try:
+                updated = rename_document(snapshot, document.id, edited_title)
+                if updated is snapshot:
+                    st.info("Document title is unchanged.")
+                else:
+                    mark_snapshot_dirty(st.session_state, updated)
+                    st.success("Document title updated in the session snapshot.")
+            except ValueError:
+                _record_error("Document title could not be updated.")
+    with source_column:
+        if document.source_url.startswith(("http://", "https://")):
+            st.link_button("Open source URL", document.source_url)
+        elif document.source_url:
+            st.caption(f"Source: {document.source_url}")
+        else:
+            st.caption("No source URL saved for this document.")
+
+
+def _render_title_backfill(*, blocked: bool, snapshot: GraphSnapshot) -> None:
+    st.divider()
+    st.caption(
+        "Fix generated titles replaces 64-character SHA titles from content headings."
     )
-    if _action_button(
-        "Fill missing document titles",
-        disabled=blocked or not confirm_titles or not snapshot.documents,
+    if not _action_button(
+        "Fix generated titles", disabled=blocked or not snapshot.documents
     ):
-        try:
-            updated, renamed = _run_visible_operation(
-                "title_backfill",
-                "Заполнение названий документов… Подождите.",
-                lambda: fill_missing_document_titles(st.session_state.snapshot),
+        return
+    try:
+        updated, renamed = _run_visible_operation(
+            "title_backfill",
+            "Заполнение названий документов… Подождите.",
+            lambda: fill_missing_document_titles(st.session_state.snapshot),
+        )
+        if renamed:
+            mark_snapshot_dirty(st.session_state, updated)
+            st.success(
+                f"Renamed {renamed} documents from content headings. "
+                "Publish a dump and rebuild the DB to use them."
             )
-            if renamed:
-                mark_snapshot_dirty(st.session_state, updated)
-                st.success(
-                    f"Renamed {renamed} documents from content headings. "
-                    "Publish a dump and rebuild the DB to use them."
-                )
-            else:
-                st.info("No sha-titled documents found.")
-        except (ValueError, OSError, RuntimeError):
-            _record_error("Title backfill failed safely; no titles were changed.")
-    st.dataframe(
-        [item.model_dump() for item in snapshot.document_versions], width="stretch"
-    )
-    ids = tuple(item.id for item in snapshot.documents)
-    selected = st.selectbox("Deletion document ID", ids) if ids else None
-    active = _active(config)
-    deletion_ready = (
-        not blocked
-        and selected is not None
-        and active is not None
-        and st.session_state.get("snapshot_dirty") is False
-    )
-    if _action_button("Preview deletion", disabled=not deletion_ready):
-        try:
-            assert active is not None
-            command = DeletionCommand(
-                target=GraphNodeRef(table_name="Document", id=cast(str, selected))
+        else:
+            st.info("No generated SHA titles found.")
+    except (ValueError, OSError, RuntimeError):
+        _record_error("Title backfill failed safely; no titles were changed.")
+
+
+def _execute_document_deletion(
+    *,
+    config: UiRuntimeConfig,
+    snapshot: GraphSnapshot,
+    active: tuple[Path, DatabaseManifest],
+    command: DeletionCommand,
+    impact: DeletionImpact,
+) -> None:
+    try:
+        execution = _run_visible_operation(
+            "deletion_rebuild",
+            "Удаление данных и перестроение БД… Подождите.",
+            lambda: confirm_deletion(
+                snapshot=snapshot,
+                command=command,
+                confirmation=impact,
+                config=config,
+                active=active,
+            ),
+        )
+        dump_path = config.dumps_root / f"dump-{execution.dump.dump_number:06d}"
+        bind_snapshot(st.session_state, execution.snapshot, execution.dump, dump_path)
+        if execution.result.status == "completed":
+            assert execution.database_path is not None
+            assert execution.database is not None
+            st.session_state.active_db = (
+                execution.database_path,
+                execution.database,
             )
-            identity = DatabaseIdentity(
-                database_name=active[1].database_name, build_id=active[1].build_id
+            st.success("Deletion published and replacement DB selected.")
+        else:
+            st.session_state.active_db = None
+            st.warning(
+                "Deletion published. Replacement DB is pending; old DB is stale."
             )
-            impact = preview_deletion(snapshot, command, (identity,))
-            st.session_state.deletion_preview = (
-                command,
-                impact,
-                st.session_state.snapshot_dump_run_id,
-                active[1].build_id,
-            )
-        except (ValueError, RuntimeError):
-            _record_error("Deletion preview failed.")
+        st.session_state.pop("deletion_preview", None)
+    except (ValueError, OSError, RuntimeError):
+        _record_error("Deletion failed before a safe session transition.")
+
+
+def _render_deletion_confirmation(
+    *,
+    config: UiRuntimeConfig | None,
+    snapshot: GraphSnapshot,
+    active: tuple[Path, DatabaseManifest] | None,
+    selected_document_id: str | None,
+) -> None:
     preview_binding = st.session_state.get("deletion_preview")
-    if isinstance(preview_binding, tuple) and len(preview_binding) == 4:
-        command, impact, dump_run_id, build_id = preview_binding
+    if not isinstance(preview_binding, tuple) or len(preview_binding) != 4:
+        return
+    command, impact, dump_run_id, build_id = preview_binding
+    if command.target.id != selected_document_id:
+        return
+    with st.expander("Deletion preview", expanded=False):
         st.json(impact.model_dump(mode="json"))
         st.warning("Physical media is never deleted. The previous DB becomes stale.")
         confirmed = st.checkbox(
@@ -426,43 +508,109 @@ def _documents(config: UiRuntimeConfig | None) -> None:
             "Confirm deletion",
             disabled=not confirmed or not still_exact or config is None,
         ):
-            try:
-                assert config is not None and active is not None
-                configure_ladybug_home(config)
-                execution = _run_visible_operation(
-                    "deletion_rebuild",
-                    "Удаление данных и перестроение БД… Подождите.",
-                    lambda: confirm_deletion(
-                        snapshot=snapshot,
-                        command=command,
-                        confirmation=impact,
-                        config=config,
-                        active=active,
-                    ),
-                )
-                dump_path = config.dumps_root / (
-                    f"dump-{execution.dump.dump_number:06d}"
-                )
-                bind_snapshot(
-                    st.session_state, execution.snapshot, execution.dump, dump_path
-                )
-                if execution.result.status == "completed":
-                    assert execution.database_path is not None
-                    assert execution.database is not None
-                    st.session_state.active_db = (
-                        execution.database_path,
-                        execution.database,
-                    )
-                    st.success("Deletion published and replacement DB selected.")
-                else:
-                    st.session_state.active_db = None
-                    st.warning(
-                        "Deletion published. Replacement DB is pending; "
-                        "old DB is stale."
-                    )
-                st.session_state.pop("deletion_preview", None)
-            except (ValueError, OSError, RuntimeError):
-                _record_error("Deletion failed before a safe session transition.")
+            assert config is not None and active is not None
+            _execute_document_deletion(
+                config=config,
+                snapshot=snapshot,
+                active=active,
+                command=command,
+                impact=impact,
+            )
+
+
+def _render_document_deletion(
+    *,
+    config: UiRuntimeConfig | None,
+    blocked: bool,
+    snapshot: GraphSnapshot,
+    selected_document_id: str | None,
+) -> None:
+    active = _active(config)
+    deletion_ready = (
+        not blocked
+        and selected_document_id is not None
+        and active is not None
+        and st.session_state.get("snapshot_dirty") is False
+    )
+    if _action_button("Preview deletion", disabled=not deletion_ready):
+        try:
+            assert active is not None and selected_document_id is not None
+            command = DeletionCommand(
+                target=GraphNodeRef(table_name="Document", id=selected_document_id)
+            )
+            identity = DatabaseIdentity(
+                database_name=active[1].database_name, build_id=active[1].build_id
+            )
+            impact = preview_deletion(snapshot, command, (identity,))
+            st.session_state.deletion_preview = (
+                command,
+                impact,
+                st.session_state.snapshot_dump_run_id,
+                active[1].build_id,
+            )
+        except (ValueError, RuntimeError):
+            _record_error("Deletion preview failed.")
+    _render_deletion_confirmation(
+        config=config,
+        snapshot=snapshot,
+        active=active,
+        selected_document_id=selected_document_id,
+    )
+
+
+def _documents(config: UiRuntimeConfig | None) -> None:
+    st.subheader("Documents")
+    blocked = _blocked(config)
+    snapshot = st.session_state.snapshot
+    try:
+        summaries = build_document_summaries(snapshot)
+    except ValueError:
+        _record_error("Documents could not be listed from the current snapshot.")
+        return
+
+    document_event = st.dataframe(
+        [
+            {
+                "id": item.document.id,
+                "title": item.document.title,
+                "format": item.document.content_format,
+                "source": item.document.source_url or item.version.local_path,
+                "version": item.version.version,
+                "chunks": item.chunk_count,
+                "assets": item.asset_count,
+                "active": item.document.is_active,
+            }
+            for item in summaries
+        ],
+        key="documents_table",
+        on_select="rerun",
+        selection_mode="single-row",
+        width="stretch",
+    )
+    selected_rows = cast(Any, document_event).selection.rows
+    selected_summary = None
+    if selected_rows:
+        try:
+            selected_summary = summaries[int(selected_rows[0])]
+        except (IndexError, TypeError, ValueError):
+            _record_error("Selected document could not be found.")
+
+    if selected_summary is None:
+        st.info("Select one document to preview or change it.")
+    else:
+        _render_document_preview(snapshot, selected_summary)
+        _render_document_actions(
+            blocked=blocked, snapshot=snapshot, summary=selected_summary
+        )
+    _render_title_backfill(blocked=blocked, snapshot=snapshot)
+    _render_document_deletion(
+        config=config,
+        blocked=blocked,
+        snapshot=snapshot,
+        selected_document_id=(
+            None if selected_summary is None else selected_summary.document.id
+        ),
+    )
 
 
 def _relations(config: UiRuntimeConfig | None) -> None:

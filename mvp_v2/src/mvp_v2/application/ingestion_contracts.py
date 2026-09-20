@@ -49,6 +49,7 @@ class ExtractedInput(ContractModel):
     text: AllowEmptyMultilineText
     extension: NonBlankText
     assets: tuple[ExtractedAsset, ...] = ()
+    downloadable_urls: tuple[NonBlankText, ...] = ()
 
 
 class IngestionPreview(ContractModel):

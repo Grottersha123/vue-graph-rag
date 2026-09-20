@@ -24,7 +24,11 @@ from mvp_v2.application.dto.retrieval import (
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.relations import RelationError, RelationKind, RelationService
 from mvp_v2.ports.media import MediaVerificationError
-from mvp_v2.presentation.app import _asset_label, _run_visible_operation
+from mvp_v2.presentation.app import (
+    _asset_label,
+    _preferred_option_index,
+    _run_visible_operation,
+)
 from mvp_v2.presentation.controller import (
     commit_ingestion,
     configure_ladybug_home,
@@ -144,9 +148,7 @@ def test_chat_binds_response_and_numbered_citation() -> None:
 
 
 def test_chat_retries_once_for_out_of_range_citation() -> None:
-    model = SequenceModel(
-        ("Wrong citation [15]", "Correct answer:\n- first item [1]")
-    )
+    model = SequenceModel(("Wrong citation [15]", "Correct answer:\n- first item [1]"))
 
     answer = ChatService(Search((evidence(),)), model).answer(request())
 
@@ -158,9 +160,7 @@ def test_chat_retries_once_for_out_of_range_citation() -> None:
 def test_chat_parses_combined_and_nonsense_citation_tokens() -> None:
     model = SequenceModel(("Ответ [1, 2] и [заметка]",))
 
-    answer = ChatService(Search((evidence(), evidence())), model).answer(
-        request()
-    )
+    answer = ChatService(Search((evidence(), evidence())), model).answer(request())
 
     assert [citation.number for citation in answer.citations] == [1, 2]
 
@@ -249,6 +249,17 @@ def test_asset_label_uses_caption_then_local_path() -> None:
     asset = build_valid_snapshot().assets[0]
     assert _asset_label(asset) == "cap"
     assert _asset_label(asset.model_copy(update={"caption": ""})) == "images/a.png"
+
+
+def test_preferred_option_index_matches_id_or_label_case_insensitively() -> None:
+    assert (
+        _preferred_option_index(
+            {"other": "Other", "process-id": "OnBoarding"}, "onboarding"
+        )
+        == 2
+    )
+    assert _preferred_option_index({"Student": "Learner"}, "student") == 1
+    assert _preferred_option_index({"other": "Other"}, "student") == 0
 
 
 def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
