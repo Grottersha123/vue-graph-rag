@@ -13,12 +13,19 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
-from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
+from mvp_v2.adapters.filesystem.media import (
+    FilesystemMediaDeleter,
+    FilesystemMediaResolver,
+)
 from mvp_v2.adapters.filesystem.runtime_store import ConfinedRuntimeFileStore
 from mvp_v2.adapters.ingestion import LocalHttpUrlFetcher, LocalInputExtractor
 from mvp_v2.adapters.ladybug import build_database
 from mvp_v2.application.deletion import apply_deletion
-from mvp_v2.application.deletion_orchestration import DeletionService
+from mvp_v2.application.deletion_orchestration import (
+    DeletionService,
+    FileDeletionOutcome,
+    FileFirstDeletionService,
+)
 from mvp_v2.application.dto.deletion import (
     DatabaseIdentity,
     DeletionCommand,
@@ -37,6 +44,7 @@ from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
+from mvp_v2.ports.media import MediaDeletionError
 
 _SAFE_NAME = re.compile(r"(?![.-])(?!.*\.\.)[^/\\\x00-\x1f\x7f-\x9f]{1,128}\Z")
 _MAX_UPLOAD_FILES = 32
@@ -324,6 +332,23 @@ class _DeletionCatalog:
 
     def mark_stale_before_dump(self, dump_number: int) -> None:
         del dump_number
+
+
+def confirm_file_deletion(
+    *,
+    snapshot: GraphSnapshot,
+    command: DeletionCommand,
+    confirmation: DeletionImpact,
+    config: UiRuntimeConfig,
+) -> FileDeletionOutcome:
+    publisher = _DeletionPublisher(config)
+    service = FileFirstDeletionService(
+        publisher, FilesystemMediaDeleter(config.working_root)
+    )
+    try:
+        return service.confirm(snapshot, command, confirmation)
+    except MediaDeletionError as error:
+        raise RuntimeError("physical media deletion failed safely") from error
 
 
 def confirm_deletion(

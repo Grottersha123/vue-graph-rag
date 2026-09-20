@@ -30,7 +30,6 @@ from mvp_v2.application.document_view import (
 )
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
-    DatabaseIdentity,
     DeletionCommand,
     DeletionImpact,
     GraphNodeRef,
@@ -41,6 +40,7 @@ from mvp_v2.application.dto.retrieval import (
     EmbeddingSpaceIdentity,
     SearchRequest,
 )
+from mvp_v2.application.dump_restamp import apply_dump_restamp, plan_dump_restamp
 from mvp_v2.application.ingestion_contracts import (
     EmbeddingRequest,
     IngestionRequest,
@@ -63,7 +63,7 @@ from mvp_v2.presentation.controller import (
     bind_snapshot,
     commit_ingestion,
     configure_ladybug_home,
-    confirm_deletion,
+    confirm_file_deletion,
     database_is_stale,
     mark_snapshot_dirty,
     parse_runtime_config,
@@ -136,6 +136,7 @@ def run() -> None:
     st.title("Vue Graph RAG — local MVP")
     config = _sidebar()
     _initialize_state()
+    _render_session_status(config)
     tabs = st.tabs(TAB_LABELS)
     for tab, renderer in zip(
         tabs,
@@ -177,6 +178,30 @@ def _initialize_state() -> None:
     st.session_state.setdefault("active_db", None)
     st.session_state.setdefault("snapshot_dump_run_id", None)
     st.session_state.setdefault("snapshot_dirty", True)
+    st.session_state.setdefault("restamp_plan", None)
+
+
+def _render_session_status(config: UiRuntimeConfig | None) -> None:
+    st.sidebar.divider()
+    st.sidebar.subheader("Current session")
+    dump_manifest = st.session_state.get("dump_manifest")
+    snapshot_dirty = st.session_state.get("snapshot_dirty") is not False
+    if isinstance(dump_manifest, DumpManifest):
+        label = f"dump-{dump_manifest.dump_number:06d}"
+        if snapshot_dirty:
+            st.sidebar.warning(f"Base dump: {label} — unpublished changes")
+        else:
+            st.sidebar.success(f"Loaded dump: {label}")
+        st.sidebar.caption(f"run_id: {dump_manifest.run_id[:12]}…")
+    else:
+        st.sidebar.info("No canonical dump is loaded.")
+    active = _active(config)
+    if active is None:
+        st.sidebar.caption("Active DB: none")
+    else:
+        st.sidebar.caption(
+            f"Active DB: {active[1].database_name} ({active[1].build_id[:12]}…)"
+        )
 
 
 def _blocked(config: UiRuntimeConfig | None) -> bool:
@@ -420,7 +445,9 @@ def _render_document_actions(
 def _render_title_backfill(*, blocked: bool, snapshot: GraphSnapshot) -> None:
     st.divider()
     st.caption(
-        "Fix generated titles replaces 64-character SHA titles from content headings."
+        "Fix generated titles replaces 64-character SHA titles from content headings. "
+        "It changes only the in-memory snapshot; it does not create a dump or rebuild "
+        "the database."
     )
     if not _action_button(
         "Fix generated titles", disabled=blocked or not snapshot.documents
@@ -436,7 +463,7 @@ def _render_title_backfill(*, blocked: bool, snapshot: GraphSnapshot) -> None:
             mark_snapshot_dirty(st.session_state, updated)
             st.success(
                 f"Renamed {renamed} documents from content headings. "
-                "Publish a dump and rebuild the DB to use them."
+                "Next: LadybugDB → Publish current snapshot, then rebuild the DB."
             )
         else:
             st.info("No generated SHA titles found.")
@@ -448,78 +475,108 @@ def _execute_document_deletion(
     *,
     config: UiRuntimeConfig,
     snapshot: GraphSnapshot,
-    active: tuple[Path, DatabaseManifest],
     command: DeletionCommand,
     impact: DeletionImpact,
 ) -> None:
     try:
-        execution = _run_visible_operation(
-            "deletion_rebuild",
-            "Удаление данных и перестроение БД… Подождите.",
-            lambda: confirm_deletion(
+        outcome = _run_visible_operation(
+            "file_deletion",
+            "Публикация нового dump и удаление файлов… Подождите.",
+            lambda: confirm_file_deletion(
                 snapshot=snapshot,
                 command=command,
                 confirmation=impact,
                 config=config,
-                active=active,
             ),
         )
-        dump_path = config.dumps_root / f"dump-{execution.dump.dump_number:06d}"
-        bind_snapshot(st.session_state, execution.snapshot, execution.dump, dump_path)
-        if execution.result.status == "completed":
-            assert execution.database_path is not None
-            assert execution.database is not None
-            st.session_state.active_db = (
-                execution.database_path,
-                execution.database,
-            )
-            st.success("Deletion published and replacement DB selected.")
-        else:
-            st.session_state.active_db = None
-            st.warning(
-                "Deletion published. Replacement DB is pending; old DB is stale."
-            )
+        dump_path = config.dumps_root / f"dump-{outcome.dump.dump_number:06d}"
+        bind_snapshot(st.session_state, outcome.snapshot, outcome.dump, dump_path)
+        st.session_state.active_db = None
         st.session_state.pop("deletion_preview", None)
+        if outcome.failed_paths:
+            st.session_state.document_notice = (
+                "warning",
+                "Deletion was published, but some physical files could not be "
+                f"deleted: {', '.join(outcome.failed_paths)}",
+            )
+        else:
+            st.session_state.document_notice = (
+                "success",
+                "Deletion published as a new dump. "
+                f"Removed {len(outcome.deleted_paths)} physical files; "
+                f"{len(outcome.missing_paths)} were already absent. "
+                "Rebuild the database when ready.",
+            )
+        st.rerun()
     except (ValueError, OSError, RuntimeError):
         _record_error("Deletion failed before a safe session transition.")
+
+
+def _working_root_identity(
+    config: UiRuntimeConfig | None,
+) -> tuple[str, int, int] | None:
+    if config is None or config.working_root.is_symlink():
+        return None
+    try:
+        root = config.working_root.resolve(strict=True)
+        root_stat = root.stat()
+    except OSError:
+        return None
+    if not root.is_dir():
+        return None
+    return str(root), root_stat.st_dev, root_stat.st_ino
 
 
 def _render_deletion_confirmation(
     *,
     config: UiRuntimeConfig | None,
     snapshot: GraphSnapshot,
-    active: tuple[Path, DatabaseManifest] | None,
     selected_document_id: str | None,
 ) -> None:
     preview_binding = st.session_state.get("deletion_preview")
     if not isinstance(preview_binding, tuple) or len(preview_binding) != 4:
         return
-    command, impact, dump_run_id, build_id = preview_binding
+    command, impact, dump_run_id, working_root_identity = preview_binding
     if command.target.id != selected_document_id:
         return
     with st.expander("Deletion preview", expanded=False):
         st.json(impact.model_dump(mode="json"))
-        st.warning("Physical media is never deleted. The previous DB becomes stale.")
+        st.warning(
+            "A new canonical dump will be published. The listed document and asset "
+            "files will then be permanently deleted. The database must be rebuilt "
+            "later."
+        )
         confirmed = st.checkbox(
-            "Confirm exact deletion preview and replacement DB build", value=False
+            "Confirm graph rows and listed physical files deletion", value=False
         )
         still_exact = bool(
-            active is not None
-            and dump_run_id == st.session_state.get("snapshot_dump_run_id")
-            and build_id == active[1].build_id
+            dump_run_id == st.session_state.get("snapshot_dump_run_id")
+            and working_root_identity == _working_root_identity(config)
+            and st.session_state.get("snapshot_dirty") is False
         )
         if _action_button(
             "Confirm deletion",
             disabled=not confirmed or not still_exact or config is None,
         ):
-            assert config is not None and active is not None
+            assert config is not None
             _execute_document_deletion(
                 config=config,
                 snapshot=snapshot,
-                active=active,
                 command=command,
                 impact=impact,
             )
+
+
+def _deletion_block_reason(
+    *, blocked: bool, selected_document_id: str | None, snapshot_dirty: bool
+) -> str | None:
+    if blocked:
+        return "Deletion is blocked until the runtime configuration is valid."
+    if selected_document_id is None:
+        return "Select one document to enable deletion preview."
+    if snapshot_dirty:
+        return "Publish or reload the snapshot before deleting a document."
+    return None
 
 
 def _render_document_deletion(
@@ -529,41 +586,44 @@ def _render_document_deletion(
     snapshot: GraphSnapshot,
     selected_document_id: str | None,
 ) -> None:
-    active = _active(config)
-    deletion_ready = (
-        not blocked
-        and selected_document_id is not None
-        and active is not None
-        and st.session_state.get("snapshot_dirty") is False
+    block_reason = _deletion_block_reason(
+        blocked=blocked,
+        selected_document_id=selected_document_id,
+        snapshot_dirty=st.session_state.get("snapshot_dirty") is not False,
     )
-    if _action_button("Preview deletion", disabled=not deletion_ready):
+    if block_reason is not None:
+        st.caption(block_reason)
+    if _action_button("Preview deletion", disabled=block_reason is not None):
         try:
-            assert active is not None and selected_document_id is not None
+            assert config is not None and selected_document_id is not None
             command = DeletionCommand(
                 target=GraphNodeRef(table_name="Document", id=selected_document_id)
             )
-            identity = DatabaseIdentity(
-                database_name=active[1].database_name, build_id=active[1].build_id
-            )
-            impact = preview_deletion(snapshot, command, (identity,))
+            impact = preview_deletion(snapshot, command)
             st.session_state.deletion_preview = (
                 command,
                 impact,
                 st.session_state.snapshot_dump_run_id,
-                active[1].build_id,
+                _working_root_identity(config),
             )
         except (ValueError, RuntimeError):
             _record_error("Deletion preview failed.")
     _render_deletion_confirmation(
         config=config,
         snapshot=snapshot,
-        active=active,
         selected_document_id=selected_document_id,
     )
 
 
 def _documents(config: UiRuntimeConfig | None) -> None:
     st.subheader("Documents")
+    document_notice = st.session_state.pop("document_notice", None)
+    if isinstance(document_notice, tuple) and len(document_notice) == 2:
+        notice_level, notice_message = document_notice
+        if notice_level == "success":
+            st.success(notice_message)
+        else:
+            st.warning(notice_message)
     blocked = _blocked(config)
     snapshot = st.session_state.snapshot
     try:
@@ -840,9 +900,19 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
     blocked = _blocked(config)
     missing = False if config is None else _missing(config)
     dumps = () if config is None else _dump_paths(config.dumps_root)
+    loaded_dump = st.session_state.get("selected_dump")
+    selected_index = dumps.index(loaded_dump) if loaded_dump in dumps else 0
+    if st.session_state.get("snapshot_dirty") is True:
+        st.warning(
+            "The session contains unpublished changes. Publishing creates the next "
+            "immutable dump; it does not overwrite the loaded dump."
+        )
     selected = (
         st.selectbox(
-            "Verified dump candidate", dumps, format_func=lambda path: path.name
+            "Verified dump candidate",
+            dumps,
+            index=selected_index,
+            format_func=lambda path: path.name,
         )
         if dumps
         else None
@@ -859,7 +929,8 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
             )
             bind_snapshot(st.session_state, snapshot, dump_manifest, selected)
             st.session_state.active_db = None
-            st.success("Verified dump loaded into session.")
+            st.toast("Verified dump loaded into session.")
+            st.rerun()
         except (ValueError, OSError, RuntimeError):
             _record_error("Dump verification or loading failed.")
     confirm = st.checkbox(
@@ -885,11 +956,62 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
                 st.session_state, st.session_state.snapshot, dump_manifest, dump_path
             )
             st.session_state.active_db = None
-            st.success("Current snapshot published as a new immutable dump.")
+            st.toast("Current snapshot published as a new immutable dump.")
+            st.rerun()
         except (ValueError, OSError, RuntimeError):
             _record_error(
                 "Snapshot publication failed validation or filesystem checks."
             )
+    st.divider()
+    st.subheader("Repair manually edited dump")
+    if _action_button("Check edited dump", disabled=blocked or selected is None):
+        try:
+            assert selected is not None
+            plan = _run_visible_operation(
+                "dump_restamp_plan",
+                "Проверка дампа… Подождите.",
+                lambda: plan_dump_restamp(selected),
+            )
+            st.session_state.restamp_plan = plan
+        except (ValueError, OSError, RuntimeError):
+            _record_error("Dump repair check failed.")
+    repair_plan = st.session_state.get("restamp_plan")
+    if repair_plan is not None:
+        if repair_plan.aborted:
+            st.error("Dump cannot be auto-repaired:")
+            for problem in repair_plan.problems:
+                st.write(f"- {problem}")
+            st.session_state.restamp_plan = None
+        elif not repair_plan.report_lines:
+            st.info("Dump is already consistent; no repairs needed.")
+            st.session_state.restamp_plan = None
+        else:
+            st.write("Planned repairs:")
+            for line in repair_plan.report_lines:
+                st.write(f"- {line}")
+            rows_will_be_deleted = any(
+                "removed" in line or "dropped" in line
+                for line in repair_plan.report_lines
+            )
+            confirmation_label = (
+                "Apply these repairs (rows will be deleted)"
+                if rows_will_be_deleted
+                else "Apply manifest re-sign"
+            )
+            confirm_repair = st.checkbox(confirmation_label, value=False)
+            if _action_button("Apply dump re-sign", disabled=not confirm_repair):
+                try:
+                    report = _run_visible_operation(
+                        "dump_restamp_apply",
+                        "Применение правок и пере-подпись… Подождите.",
+                        lambda: apply_dump_restamp(repair_plan),
+                    )
+                    st.session_state.restamp_plan = None
+                    st.success(
+                        f"Dump repaired and verified. run_id {report.run_id[:12]}"
+                    )
+                except (ValueError, OSError, RuntimeError):
+                    _record_error("Dump re-sign failed.")
     artifacts = () if config is None else scan_database_manifests(config.databases_root)
     current_dump = cast(DumpManifest | None, st.session_state.get("dump_manifest"))
     for path, db_manifest in artifacts:
@@ -938,7 +1060,8 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
                 raise ValueError("database manifest does not match its source dump")
             bind_snapshot(st.session_state, snapshot, dump_manifest, source_dump)
             st.session_state.active_db = (database_path, database_manifest)
-            st.success("Database and its exact source snapshot loaded and selected.")
+            st.toast("Database and its exact source snapshot loaded and selected.")
+            st.rerun()
         except (ValueError, OSError, RuntimeError, ValidationError):
             _record_error("Database or its exact source snapshot could not be loaded.")
     name = st.text_input("Safe new database name")

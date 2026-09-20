@@ -168,20 +168,19 @@ def preview_deletion(
         for e in getattr(result, s.snapshot_field)
     }
     removed_ids = {identifier for _, identifier in old_nodes - new_nodes}
-    paths = tuple(
-        sorted(
-            {
-                item.local_path
-                for item in snapshot.document_versions
-                if item.id in removed_ids and item.local_path
-            }
-            | {
-                item.local_path
-                for item in snapshot.assets
-                if item.id in removed_ids and item.local_path
-            }
-        )
-    )
+    removed_paths = {
+        item.local_path
+        for item in snapshot.document_versions
+        if item.id in removed_ids and item.local_path
+    } | {
+        item.local_path
+        for item in snapshot.assets
+        if item.id in removed_ids and item.local_path
+    }
+    remaining_paths = {
+        item.local_path for item in result.document_versions if item.local_path
+    } | {item.local_path for item in result.assets if item.local_path}
+    paths = tuple(sorted(removed_paths - remaining_paths))
     promoted = tuple(
         sorted(
             v.id

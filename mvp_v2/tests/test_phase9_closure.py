@@ -26,8 +26,10 @@ from mvp_v2.application.relations import RelationError, RelationKind, RelationSe
 from mvp_v2.ports.media import MediaVerificationError
 from mvp_v2.presentation.app import (
     _asset_label,
+    _deletion_block_reason,
     _preferred_option_index,
     _run_visible_operation,
+    _working_root_identity,
 )
 from mvp_v2.presentation.controller import (
     commit_ingestion,
@@ -251,6 +253,40 @@ def test_asset_label_uses_caption_then_local_path() -> None:
     assert _asset_label(asset.model_copy(update={"caption": ""})) == "images/a.png"
 
 
+def test_working_root_identity_changes_with_runtime_root(tmp_path: Path) -> None:
+    from mvp_v2.bootstrap.ui import UiRuntimeConfig
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    first = UiRuntimeConfig.model_construct(working_root=first_root)
+    second = UiRuntimeConfig.model_construct(working_root=second_root)
+
+    assert _working_root_identity(first) != _working_root_identity(second)
+
+
+def test_deletion_block_reason_does_not_require_active_database() -> None:
+    assert (
+        _deletion_block_reason(
+            blocked=False, selected_document_id="document", snapshot_dirty=False
+        )
+        is None
+    )
+    assert (
+        _deletion_block_reason(
+            blocked=False, selected_document_id=None, snapshot_dirty=False
+        )
+        == "Select one document to enable deletion preview."
+    )
+    assert (
+        _deletion_block_reason(
+            blocked=False, selected_document_id="document", snapshot_dirty=True
+        )
+        == "Publish or reload the snapshot before deleting a document."
+    )
+
+
 def test_preferred_option_index_matches_id_or_label_case_insensitively() -> None:
     assert (
         _preferred_option_index(
@@ -287,6 +323,10 @@ def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
         "Search evidence",
         "Clear chat history",
     } <= labels
+    assert any(
+        item.value == "No canonical dump is loaded." for item in app.sidebar.info
+    )
+    assert any(item.value == "Active DB: none" for item in app.sidebar.caption)
 
 
 def test_database_scan_and_stale_decision_never_opens_native_db(tmp_path: Path) -> None:
