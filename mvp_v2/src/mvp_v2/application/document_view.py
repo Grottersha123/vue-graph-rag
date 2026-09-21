@@ -12,6 +12,8 @@ class DocumentSummary:
     version: DocumentVersion | None
     chunk_count: int
     asset_count: int
+    count_links_out: int
+    count_links_in: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +47,15 @@ def build_document_summaries(snapshot: GraphSnapshot) -> tuple[DocumentSummary, 
         asset_counts[asset_edge.source_id] = (
             asset_counts.get(asset_edge.source_id, 0) + 1
         )
+    outgoing_link_counts: dict[str, int] = {}
+    incoming_link_counts: dict[str, int] = {}
+    for link in snapshot.links_to:
+        outgoing_link_counts[link.source_id] = (
+            outgoing_link_counts.get(link.source_id, 0) + 1
+        )
+        incoming_link_counts[link.target_id] = (
+            incoming_link_counts.get(link.target_id, 0) + 1
+        )
 
     summaries: list[DocumentSummary] = []
     for document in snapshot.documents:
@@ -61,6 +72,8 @@ def build_document_summaries(snapshot: GraphSnapshot) -> tuple[DocumentSummary, 
                 version=version,
                 chunk_count=0 if version is None else chunk_counts.get(version.id, 0),
                 asset_count=0 if version is None else asset_counts.get(version.id, 0),
+                count_links_out=outgoing_link_counts.get(document.id, 0),
+                count_links_in=incoming_link_counts.get(document.id, 0),
             )
         )
     return tuple(summaries)

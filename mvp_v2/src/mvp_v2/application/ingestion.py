@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
+from pathlib import PurePosixPath
 
 from mvp_v2.application.chunking import (
     DEFAULT_CHUNK_POLICY,
@@ -25,6 +27,83 @@ class IngestionError(ValueError):
     pass
 
 
+def _markdown_h1(text: str) -> str | None:
+    fence_character = ""
+    fence_length = 0
+    in_comment = False
+    previous_line = ""
+    for raw_line in text.splitlines():
+        if fence_character:
+            closing = re.fullmatch(r" {0,3}(`{3,}|~{3,})[ \t]*", raw_line)
+            if (
+                closing is not None
+                and closing.group(1)[0] == fence_character
+                and len(closing.group(1)) >= fence_length
+            ):
+                fence_character = ""
+                fence_length = 0
+            previous_line = ""
+            continue
+
+        started_in_comment = in_comment
+        visible_parts: list[str] = []
+        remainder = raw_line
+        while remainder:
+            if in_comment:
+                closing_index = remainder.find("-->")
+                if closing_index < 0:
+                    remainder = ""
+                    continue
+                in_comment = False
+                remainder = remainder[closing_index + 3 :]
+                continue
+            opening_index = remainder.find("<!--")
+            if opening_index < 0:
+                visible_parts.append(remainder)
+                break
+            visible_parts.append(remainder[:opening_index])
+            remainder = remainder[opening_index + 4 :]
+            in_comment = True
+        visible_line = "".join(visible_parts)
+
+        opening = (
+            None if started_in_comment else re.match(r" {0,3}(`{3,}|~{3,})", raw_line)
+        )
+        if opening is not None:
+            marker = opening.group(1)
+            info = raw_line[opening.end() :]
+            if marker[0] != "`" or "`" not in info:
+                fence_character = marker[0]
+                fence_length = len(marker)
+                previous_line = ""
+                continue
+        if raw_line.startswith(("    ", "\t")):
+            previous_line = ""
+            continue
+
+        setext = (
+            None if started_in_comment else re.fullmatch(r" {0,3}=+[ \t]*", raw_line)
+        )
+        if setext is not None and previous_line:
+            return " ".join(previous_line.split())
+
+        raw_atx = None if started_in_comment else re.match(r" {0,3}#[ \t]+", raw_line)
+        atx = (
+            re.fullmatch(r" {0,3}#[ \t]+(.+?)", visible_line)
+            if raw_atx is not None
+            else None
+        )
+        if atx is not None:
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", atx.group(1))
+            normalized = " ".join(title.split())
+            if normalized:
+                return normalized
+
+        stripped = visible_line.strip()
+        previous_line = stripped if stripped else ""
+    return None
+
+
 class IngestionService:
     def __init__(
         self,
@@ -43,12 +122,12 @@ class IngestionService:
         if request.source_type_id not in {item.id for item in snapshot.source_types}:
             raise IngestionError("source_type_id does not resolve exactly")
         self._validate_optional_ids(snapshot, request)
+        request = self._with_resolved_identity(request)
         identity = request.external_id or request.source_url
-        if not identity:
-            raise IngestionError("external_id or source_url is required")
         extracted = self._extractor.extract(request)
+        request = self._with_resolved_title(request, extracted.text)
         document_id = self._find_document(snapshot, request) or stable_id(
-            "document", request.kind, identity
+            "doc", request.kind, identity
         )
         prior = self._versions(snapshot, document_id)
         version = max((item.version for item in prior), default=0) + 1
@@ -136,6 +215,38 @@ class IngestionService:
         new_snapshot = _validated_snapshot(new_snapshot)
         written = self._store.write_files(tuple(files))
         return CommitResult(snapshot=new_snapshot, written_paths=written)
+
+    @staticmethod
+    def _with_resolved_title(
+        request: IngestionRequest, extracted_text: str
+    ) -> IngestionRequest:
+        normalized = " ".join(request.title.split())
+        if normalized:
+            return request.model_copy(update={"title": normalized})
+        if request.kind != "markdown":
+            raise IngestionError("title is required for non-Markdown input")
+
+        heading = _markdown_h1(extracted_text)
+        if heading is not None:
+            return request.model_copy(update={"title": heading})
+
+        filename = PurePosixPath(request.input_path).stem
+        normalized_filename = " ".join(filename.split())
+        if not normalized_filename or normalized_filename == ".":
+            raise IngestionError("Markdown title could not be generated")
+        return request.model_copy(update={"title": normalized_filename})
+
+    @staticmethod
+    def _with_resolved_identity(request: IngestionRequest) -> IngestionRequest:
+        if request.external_id or request.source_url:
+            return request
+        if request.kind == "image_collection":
+            raise IngestionError(
+                "external_id or source_url is required for an image collection"
+            )
+        if request.kind == "url" or not request.input_path:
+            raise IngestionError("external_id, source_url, or local path is required")
+        return request.model_copy(update={"external_id": f"local:{request.input_path}"})
 
     @staticmethod
     def _find_document(

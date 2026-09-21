@@ -322,7 +322,13 @@ def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
         "Save as new DB",
         "Search evidence",
         "Clear chat history",
+        "Commit changes",
+        "Publish changes as new dump",
     } <= labels
+    assert "Confirm publish current snapshot as next immutable dump" not in {
+        checkbox.label for checkbox in app.checkbox
+    }
+    assert "Publish current snapshot" not in labels
     assert any(
         item.value == "No canonical dump is loaded." for item in app.sidebar.info
     )

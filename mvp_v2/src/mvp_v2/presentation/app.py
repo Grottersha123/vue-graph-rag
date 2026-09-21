@@ -22,7 +22,10 @@ from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
 from mvp_v2.application.chunk_backfill import build_missing_chunks
 from mvp_v2.application.deletion import preview_deletion
-from mvp_v2.application.document_editing import rename_document
+from mvp_v2.application.document_editing import (
+    DocumentMetadataUpdate,
+    update_document_metadata,
+)
 from mvp_v2.application.document_view import (
     DocumentSummary,
     build_document_summaries,
@@ -113,8 +116,12 @@ def _asset_label(asset: Asset) -> str:
     return asset.caption.strip() or asset.local_path
 
 
-def _action_button(label: str, *, disabled: bool = False) -> bool:
-    clicked = st.button(label, disabled=disabled)
+def _action_button(
+    label: str, *, disabled: bool = False, primary: bool = False
+) -> bool:
+    clicked = st.button(
+        label, disabled=disabled, type="primary" if primary else "secondary"
+    )
     if clicked:
         record_user_action(label)
     return clicked
@@ -202,6 +209,49 @@ def _render_session_status(config: UiRuntimeConfig | None) -> None:
         st.sidebar.caption(
             f"Active DB: {active[1].database_name} ({active[1].build_id[:12]}…)"
         )
+    runtime_ready = config is not None and all(
+        path.is_dir() and not path.is_symlink()
+        for path in (
+            config.working_root,
+            config.dumps_root,
+            config.databases_root,
+            config.ladybug_home,
+        )
+    )
+    publish_clicked = st.sidebar.button(
+        "Publish changes as new dump",
+        type="primary",
+        disabled=not snapshot_dirty or not runtime_ready,
+    )
+    if publish_clicked:
+        record_user_action("Publish changes as new dump")
+        assert config is not None
+        _publish_session_snapshot(config)
+    elif not snapshot_dirty:
+        st.sidebar.caption("No unpublished changes.")
+
+
+def _publish_session_snapshot(config: UiRuntimeConfig) -> None:
+    try:
+        dump_manifest = _run_visible_operation(
+            "dump_publication",
+            "Публикация snapshot… Подождите.",
+            lambda: SnapshotPublicationService(FilesystemDumpRepository()).publish(
+                dumps_root=config.dumps_root,
+                snapshot=st.session_state.snapshot,
+                published_at=datetime.now(UTC),
+                media_resolver=FilesystemMediaResolver(config.working_root),
+            ),
+        )
+        dump_path = config.dumps_root / f"dump-{dump_manifest.dump_number:06d}"
+        bind_snapshot(
+            st.session_state, st.session_state.snapshot, dump_manifest, dump_path
+        )
+        st.session_state.active_db = None
+        st.toast("Current snapshot published as a new immutable dump.")
+        st.rerun()
+    except (ValueError, OSError, RuntimeError):
+        _record_error("Snapshot publication failed validation or filesystem checks.")
 
 
 def _blocked(config: UiRuntimeConfig | None) -> bool:
@@ -292,8 +342,19 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         index=_preferred_option_index(roles, "student"),
         format_func=lambda value: roles.get(value, "Not selected"),
     )
-    title = st.text_input("Title")
+    title = st.text_input(
+        "Title",
+        help=(
+            "Optional for Markdown: the first H1 is used, then the file name. "
+            "A typed title overrides both."
+        ),
+    )
     external_id = st.text_input("Existing/new identity (external_id)")
+    st.caption(
+        "Optional for PDF, Markdown, and HTML: without a Source URL, identity is "
+        "generated as local:<primary file path>. Image collections require an "
+        "external_id or Source URL."
+    )
     source_url_label = (
         "Public HTTP(S) URL (required)"
         if kind == "url"
@@ -305,8 +366,13 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         if kind != "url"
         else None
     )
+    title_is_valid = bool(title.strip()) or kind == "markdown"
+    identity_is_valid = kind != "image_collection" or bool(
+        external_id.strip() or source_url.strip()
+    )
     valid = bool(
-        title.strip()
+        title_is_valid
+        and identity_is_valid
         and source_type_id
         and status_id
         and (source_url.strip() if kind == "url" else uploads)
@@ -351,6 +417,7 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         st.json(
             {
                 "document_id": preview.document_id,
+                "title": preview.request.title,
                 "version": preview.version,
                 "sha256": preview.content_sha256,
                 "chunks": len(preview.chunk_texts),
@@ -414,32 +481,93 @@ def _render_document_preview(snapshot: GraphSnapshot, summary: DocumentSummary) 
 def _render_document_actions(
     *, blocked: bool, snapshot: GraphSnapshot, summary: DocumentSummary
 ) -> None:
+    del blocked, snapshot
     document = summary.document
-    st.markdown("#### Selected document actions")
-    title_column, source_column = st.columns(2)
-    with title_column:
-        edited_title = st.text_input(
-            "Document title",
-            value=document.title,
-            key=f"document_title_{document.id}",
+    if document.source_url.startswith(("http://", "https://")):
+        st.link_button("Open source URL", document.source_url)
+    elif document.source_url:
+        st.caption(f"Source: {document.source_url}")
+
+
+def _editor_records(value: Any) -> list[dict[str, Any]]:
+    records = (
+        value if isinstance(value, list) else cast(Any, value).to_dict(orient="records")
+    )
+    return cast(list[dict[str, Any]], records)
+
+
+def _metadata_updates_from_editor(value: Any) -> tuple[DocumentMetadataUpdate, ...]:
+    records = _editor_records(value)
+    updates: list[DocumentMetadataUpdate] = []
+    for record in records:
+        is_active = record.get("is_active")
+        if type(is_active) is not bool:
+            raise ValueError("is_active must be boolean")
+        updates.append(
+            DocumentMetadataUpdate(
+                document_id=str(record.get("id", "")),
+                title=str(record.get("title", "")),
+                source_url=str(record.get("source_url", "")),
+                external_id=str(record.get("external_id", "")),
+                is_active=is_active,
+            )
         )
-        if _action_button("Save title", disabled=blocked or not edited_title.strip()):
-            try:
-                updated = rename_document(snapshot, document.id, edited_title)
-                if updated is snapshot:
-                    st.info("Document title is unchanged.")
-                else:
-                    mark_snapshot_dirty(st.session_state, updated)
-                    st.success("Document title updated in the session snapshot.")
-            except ValueError:
-                _record_error("Document title could not be updated.")
-    with source_column:
-        if document.source_url.startswith(("http://", "https://")):
-            st.link_button("Open source URL", document.source_url)
-        elif document.source_url:
-            st.caption(f"Source: {document.source_url}")
+    return tuple(updates)
+
+
+def _document_metadata_diff(
+    snapshot: GraphSnapshot, updates: tuple[DocumentMetadataUpdate, ...]
+) -> list[dict[str, object]]:
+    original = {item.id: item for item in snapshot.documents}
+    changes: list[dict[str, object]] = []
+    for update in updates:
+        document = original.get(update.document_id)
+        if document is None:
+            continue
+        proposed = {
+            "title": " ".join(update.title.split()),
+            "source_url": update.source_url.strip(),
+            "external_id": update.external_id.strip(),
+            "is_active": update.is_active,
+        }
+        for field, after in proposed.items():
+            before = getattr(document, field)
+            if before != after:
+                changes.append(
+                    {
+                        "document_id": document.id,
+                        "field": field,
+                        "before": before,
+                        "after": after,
+                    }
+                )
+    return changes
+
+
+def _render_document_metadata_commit(
+    *, blocked: bool, snapshot: GraphSnapshot, edited: Any
+) -> None:
+    try:
+        updates = _metadata_updates_from_editor(edited)
+        changes = _document_metadata_diff(snapshot, updates)
+        if changes:
+            st.markdown("**Pending changes**")
+            st.dataframe(changes, width="stretch", hide_index=True)
         else:
-            st.caption("No source URL saved for this document.")
+            st.info("No metadata changes to commit.")
+        if _action_button(
+            "Commit changes",
+            disabled=blocked or not changes,
+            primary=True,
+        ):
+            updated = update_document_metadata(snapshot, updates)
+            mark_snapshot_dirty(st.session_state, updated)
+            revision = int(st.session_state.get("document_editor_revision", 0))
+            st.session_state.document_editor_revision = revision + 1
+            st.toast("Metadata changes committed to the session snapshot.")
+            st.rerun()
+    except (TypeError, ValueError, ValidationError):
+        _record_error("Document metadata is invalid. Fix the values before commit.")
 
 
 def _render_title_backfill(*, blocked: bool, snapshot: GraphSnapshot) -> None:
@@ -541,30 +669,31 @@ def _render_deletion_confirmation(
         return
     with st.expander("Deletion preview", expanded=False):
         st.json(impact.model_dump(mode="json"))
-        st.warning(
-            "A new canonical dump will be published. The listed document and asset "
-            "files will then be permanently deleted. The database must be rebuilt "
-            "later."
+    st.markdown("**Deletion confirmation**")
+    st.warning(
+        "A new canonical dump will be published. The listed document and asset "
+        "files will then be permanently deleted. The database must be rebuilt "
+        "later."
+    )
+    confirmed = st.checkbox(
+        "Confirm graph rows and listed physical files deletion", value=False
+    )
+    still_exact = bool(
+        dump_run_id == st.session_state.get("snapshot_dump_run_id")
+        and working_root_identity == _working_root_identity(config)
+        and st.session_state.get("snapshot_dirty") is False
+    )
+    if _action_button(
+        "Confirm deletion",
+        disabled=not confirmed or not still_exact or config is None,
+    ):
+        assert config is not None
+        _execute_document_deletion(
+            config=config,
+            snapshot=snapshot,
+            command=command,
+            impact=impact,
         )
-        confirmed = st.checkbox(
-            "Confirm graph rows and listed physical files deletion", value=False
-        )
-        still_exact = bool(
-            dump_run_id == st.session_state.get("snapshot_dump_run_id")
-            and working_root_identity == _working_root_identity(config)
-            and st.session_state.get("snapshot_dirty") is False
-        )
-        if _action_button(
-            "Confirm deletion",
-            disabled=not confirmed or not still_exact or config is None,
-        ):
-            assert config is not None
-            _execute_document_deletion(
-                config=config,
-                snapshot=snapshot,
-                command=command,
-                impact=impact,
-            )
 
 
 def _deletion_block_reason(
@@ -632,41 +761,66 @@ def _documents(config: UiRuntimeConfig | None) -> None:
         _record_error("Documents could not be listed from the current snapshot.")
         return
 
-    document_event = st.dataframe(
+    revision = int(st.session_state.get("document_editor_revision", 0))
+    edited = st.data_editor(
         [
             {
+                "selected": False,
                 "id": item.document.id,
                 "title": item.document.title,
+                "source_url": item.document.source_url,
+                "external_id": item.document.external_id,
                 "format": item.document.content_format,
-                "source": item.document.source_url
-                or ("" if item.version is None else item.version.local_path),
+                "local_path": "" if item.version is None else item.version.local_path,
                 "version": None if item.version is None else item.version.version,
                 "chunks": item.chunk_count,
                 "assets": item.asset_count,
-                "active": item.document.is_active,
+                "count_links_out": item.count_links_out,
+                "count_links_in": item.count_links_in,
+                "is_active": item.document.is_active,
             }
             for item in summaries
         ],
-        key="documents_table",
-        on_select="rerun",
-        selection_mode="single-row",
+        key=f"documents_table_editor_{revision}",
+        disabled=(
+            "id",
+            "format",
+            "local_path",
+            "version",
+            "chunks",
+            "assets",
+            "count_links_out",
+            "count_links_in",
+        ),
+        column_config={
+            "selected": st.column_config.CheckboxColumn(
+                "Select", help="Select one document for preview or deletion."
+            )
+        },
+        num_rows="fixed",
         width="stretch",
     )
-    selected_rows = cast(Any, document_event).selection.rows
-    selected_summary = None
-    if selected_rows:
-        try:
-            selected_summary = summaries[int(selected_rows[0])]
-        except (IndexError, TypeError, ValueError):
-            _record_error("Selected document could not be found.")
+    _render_document_metadata_commit(blocked=blocked, snapshot=snapshot, edited=edited)
 
-    if selected_summary is None:
-        st.info("Select one document to preview or change it.")
+    selected_ids = [
+        str(record.get("id", ""))
+        for record in _editor_records(edited)
+        if record.get("selected") is True
+    ]
+    summary_by_id = {item.document.id: item for item in summaries}
+    selected_summary = (
+        summary_by_id.get(selected_ids[0]) if len(selected_ids) == 1 else None
+    )
+    if len(selected_ids) > 1:
+        st.warning("Select only one document for preview or deletion.")
+    elif selected_summary is None:
+        st.info("Select one document to preview or delete it.")
     else:
         _render_document_preview(snapshot, selected_summary)
         _render_document_actions(
             blocked=blocked, snapshot=snapshot, summary=selected_summary
         )
+
     _render_title_backfill(blocked=blocked, snapshot=snapshot)
     _render_document_deletion(
         config=config,
@@ -933,35 +1087,6 @@ def _ladybug(config: UiRuntimeConfig | None) -> None:
             st.rerun()
         except (ValueError, OSError, RuntimeError):
             _record_error("Dump verification or loading failed.")
-    confirm = st.checkbox(
-        "Confirm publish current snapshot as next immutable dump", value=False
-    )
-    if _action_button(
-        "Publish current snapshot", disabled=blocked or missing or not confirm
-    ):
-        try:
-            assert config is not None
-            dump_manifest = _run_visible_operation(
-                "dump_publication",
-                "Публикация snapshot… Подождите.",
-                lambda: SnapshotPublicationService(FilesystemDumpRepository()).publish(
-                    dumps_root=config.dumps_root,
-                    snapshot=st.session_state.snapshot,
-                    published_at=datetime.now(UTC),
-                    media_resolver=FilesystemMediaResolver(config.working_root),
-                ),
-            )
-            dump_path = config.dumps_root / f"dump-{dump_manifest.dump_number:06d}"
-            bind_snapshot(
-                st.session_state, st.session_state.snapshot, dump_manifest, dump_path
-            )
-            st.session_state.active_db = None
-            st.toast("Current snapshot published as a new immutable dump.")
-            st.rerun()
-        except (ValueError, OSError, RuntimeError):
-            _record_error(
-                "Snapshot publication failed validation or filesystem checks."
-            )
     st.divider()
     st.subheader("Repair manually edited dump")
     if _action_button("Check edited dump", disabled=blocked or selected is None):

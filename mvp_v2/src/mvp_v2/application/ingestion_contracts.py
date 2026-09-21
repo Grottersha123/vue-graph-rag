@@ -24,7 +24,7 @@ BatchSize = Annotated[int, Field(strict=True, ge=1, le=256)]
 
 class IngestionRequest(ContractModel):
     kind: SourceKind
-    title: NonBlankText
+    title: AllowEmptyText
     source_type_id: EntityId
     external_id: AllowEmptyText
     status_id: EntityId
