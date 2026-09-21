@@ -24,12 +24,31 @@ NonNegativeInt = Annotated[int, Field(strict=True, ge=0, le=9_223_372_036_854_77
 PositiveInt = Annotated[int, Field(strict=True, ge=1, le=9_223_372_036_854_775_807)]
 
 
-class SourceType(ContractModel):
+CustomPropertyValue = str | int | bool | FiniteVector
+
+
+class CustomProperty(ContractModel):
+    name: NonBlankText
+    value: CustomPropertyValue
+
+
+class ExtensibleNode(ContractModel):
+    custom_properties: tuple[CustomProperty, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_custom_property_names(self) -> ExtensibleNode:
+        names = tuple(item.name for item in self.custom_properties)
+        if len(names) != len(set(names)):
+            raise ValueError("custom property names must be unique")
+        return self
+
+
+class SourceType(ExtensibleNode):
     id: EntityId
     code: NonBlankText
 
 
-class Document(ContractModel):
+class Document(ExtensibleNode):
     id: EntityId
     title: NonBlankText
     source_name: AllowEmptyText
@@ -37,9 +56,10 @@ class Document(ContractModel):
     source_url: AllowEmptyText
     external_id: AllowEmptyText
     is_active: bool
+    summary: AllowEmptyMultilineText = ""
 
 
-class DocumentVersion(ContractModel):
+class DocumentVersion(ExtensibleNode):
     id: EntityId
     version: PositiveInt
     sha256: str
@@ -62,11 +82,12 @@ class DocumentVersion(ContractModel):
         return self
 
 
-class Chunk(ContractModel):
+class Chunk(ExtensibleNode):
     id: EntityId
     position: NonNegativeInt
     content: RequiredMultilineText
     content_hash: Sha256
+    summary: AllowEmptyMultilineText = ""
 
     @model_validator(mode="after")
     def validate_content_hash(self) -> Chunk:
@@ -76,7 +97,7 @@ class Chunk(ContractModel):
         return self
 
 
-class Asset(ContractModel):
+class Asset(ExtensibleNode):
     id: EntityId
     asset_type: Literal["image"]
     mime_type: NonBlankText
@@ -85,42 +106,43 @@ class Asset(ContractModel):
     external_id: AllowEmptyText
     sha256: Sha256
     position: NonNegativeInt
-    caption: AllowEmptyMultilineText
-    llm_description: AllowEmptyMultilineText
-    ocr_text: AllowEmptyMultilineText
+    description: AllowEmptyMultilineText = ""
+    ocr_text: AllowEmptyMultilineText = ""
 
 
-class Embedding(ContractModel):
+class Embedding(ExtensibleNode):
     id: EntityId
     provider: NonBlankText
     model: NonBlankText
     model_version: NonBlankText
-    purpose: Literal["chunk_retrieval", "asset_description_retrieval"]
     dimension: PositiveInt
     vector: FiniteVector
     created_at: UtcDateTime
     is_current: bool
+    summary_vector: FiniteVector = ()
 
     @model_validator(mode="after")
     def validate_vector_dimension(self) -> Embedding:
         if len(self.vector) != self.dimension:
             raise ValueError("vector length must equal dimension")
+        if self.summary_vector and len(self.summary_vector) != self.dimension:
+            raise ValueError("summary_vector must be empty or match dimension")
         return self
 
 
-class Role(ContractModel):
+class Role(ExtensibleNode):
     id: EntityId
     name: NonBlankText
 
 
-class Process(ContractModel):
+class Process(ExtensibleNode):
     id: EntityId
     name: NonBlankText
     status: NonBlankText
     owner: AllowEmptyText
 
 
-class Status(ContractModel):
+class Status(ExtensibleNode):
     id: EntityId
     name: NonBlankText
     description: AllowEmptyMultilineText
@@ -164,6 +186,10 @@ class HasEmbeddingChunk(Relation):
 
 
 class HasEmbeddingAsset(Relation):
+    pass
+
+
+class HasSummaryEmbedding(Relation):
     pass
 
 

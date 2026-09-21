@@ -14,6 +14,7 @@ from mvp_v2.domain.invariant_indexes import (
 from mvp_v2.domain.schema_registry import (
     NODE_SPECS,
     RELATION_SPECS,
+    ScalarType,
 )
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.domain.validation import (
@@ -31,6 +32,7 @@ def validate_graph(snapshot: GraphSnapshot) -> ValidationResult:
     issues: list[ValidationIssue] = []
     indexes = build_indexes(snapshot)
     _validate_unique_ids(snapshot, issues)
+    _validate_custom_properties(snapshot, issues)
     _validate_edges(snapshot, indexes, issues)
     _validate_required_ownership(snapshot, indexes, issues)
     _validate_current_versions(snapshot, indexes, issues)
@@ -46,6 +48,61 @@ def _issue(code: str, table: str, record_id: str, message: str) -> ValidationIss
     return ValidationIssue(
         severity="error", code=code, table=table, record_id=record_id, message=message
     )
+
+
+def _validate_custom_properties(
+    snapshot: GraphSnapshot, issues: list[ValidationIssue]
+) -> None:
+    for spec in NODE_SPECS:
+        declared = {
+            item.name: item.scalar_type for item in spec.properties if item.custom
+        }
+        for node in getattr(snapshot, spec.snapshot_field):
+            for custom in node.custom_properties:
+                scalar_type = declared.get(custom.name)
+                if scalar_type is None:
+                    issues.append(
+                        _issue(
+                            "UNDECLARED_CUSTOM_PROPERTY",
+                            spec.table_name,
+                            node.id,
+                            f"custom property {custom.name} is not declared",
+                        )
+                    )
+                elif not _matches_custom_type(custom.value, scalar_type):
+                    issues.append(
+                        _issue(
+                            "CUSTOM_PROPERTY_TYPE_MISMATCH",
+                            spec.table_name,
+                            node.id,
+                            f"custom property {custom.name} has the wrong type",
+                        )
+                    )
+                elif (
+                    scalar_type is ScalarType.FLOAT_VECTOR
+                    and custom.value
+                    and len(custom.value) != getattr(node, "dimension", -1)
+                ):
+                    issues.append(
+                        _issue(
+                            "CUSTOM_VECTOR_DIMENSION_MISMATCH",
+                            spec.table_name,
+                            node.id,
+                            f"custom vector {custom.name} does not match dimension",
+                        )
+                    )
+
+
+def _matches_custom_type(value: object, scalar_type: ScalarType) -> bool:
+    if scalar_type is ScalarType.STRING:
+        return isinstance(value, str)
+    if scalar_type is ScalarType.INT64:
+        return type(value) is int
+    if scalar_type is ScalarType.BOOLEAN:
+        return type(value) is bool
+    if scalar_type is ScalarType.FLOAT_VECTOR:
+        return isinstance(value, tuple)
+    return False
 
 
 def _validate_unique_ids(
@@ -202,55 +259,48 @@ def _validate_current_versions(
 def _validate_embedding_ownership(
     snapshot: GraphSnapshot, indexes: GraphIndexes, issues: list[ValidationIssue]
 ) -> None:
-    chunk_owners = index_incoming(snapshot.has_embedding_chunks)
-    asset_owners = index_incoming(snapshot.has_embedding_assets)
+    owners_by_kind = (
+        ("chunk", index_incoming(snapshot.has_embedding_chunks)),
+        ("asset", index_incoming(snapshot.has_embedding_assets)),
+        ("document", index_incoming(snapshot.has_summary_embeddings)),
+    )
     for identifier in indexes.node_ids["Embedding"]:
-        chunk_count = len(chunk_owners.get(identifier, ()))
-        asset_count = len(asset_owners.get(identifier, ()))
-        if chunk_count + asset_count != 1:
+        owner_counts = {
+            kind: len(owners.get(identifier, ())) for kind, owners in owners_by_kind
+        }
+        owner_count = sum(owner_counts.values())
+        if owner_count != 1:
             issues.append(
                 _issue(
                     "EMBEDDING_OWNER_COUNT",
                     "Embedding",
                     identifier,
-                    "embedding requires one chunk or asset owner; "
-                    f"found {chunk_count + asset_count}",
+                    "embedding requires exactly one chunk, asset, or document "
+                    f"owner; found {owner_count}",
                 )
             )
-        if chunk_count and asset_count:
+        populated_kinds = tuple(kind for kind, count in owner_counts.items() if count)
+        if len(populated_kinds) > 1:
             issues.append(
                 _issue(
                     "EMBEDDING_OWNER_KIND_CONFLICT",
                     "Embedding",
                     identifier,
-                    "embedding is owned by both chunk and asset",
+                    f"embedding has conflicting owner kinds {populated_kinds}",
                 )
             )
-    _validate_embedding_purposes(snapshot, indexes, issues)
-
-
-def _validate_embedding_purposes(
-    snapshot: GraphSnapshot, indexes: GraphIndexes, issues: list[ValidationIssue]
-) -> None:
-    expected_relations = (
-        ("HAS_EMBEDDING_CHUNK", snapshot.has_embedding_chunks, "chunk_retrieval"),
-        (
-            "HAS_EMBEDDING_ASSET",
-            snapshot.has_embedding_assets,
-            "asset_description_retrieval",
-        ),
-    )
-    for relation_table, relations, expected_purpose in expected_relations:
-        for relation in relations:
-            embedding = indexes.embedding_by_id.get(relation.target_id)
-            if embedding is None or embedding.purpose == expected_purpose:
-                continue
+        embedding = indexes.embedding_by_id.get(identifier)
+        if (
+            embedding is not None
+            and embedding.summary_vector
+            and any(kind != "chunk" for kind in populated_kinds)
+        ):
             issues.append(
                 _issue(
-                    "EMBEDDING_PURPOSE_OWNER_MISMATCH",
-                    relation_table,
-                    f"{relation.source_id}->{relation.target_id}",
-                    f"owner relation requires purpose {expected_purpose}",
+                    "SUMMARY_VECTOR_OWNER_MISMATCH",
+                    "Embedding",
+                    identifier,
+                    "summary_vector is only valid for chunk-owned embeddings",
                 )
             )
 
@@ -263,10 +313,12 @@ def _validate_current_embedding_spaces(
     }
     current_chunks = _subjects_under_current(indexes.chunk_versions, current_versions)
     current_assets = _subjects_under_current(indexes.asset_versions, current_versions)
+    documents = {item.id for item in snapshot.documents}
     grouped: Counter[tuple[str, str, EmbeddingIdentity]] = Counter()
     typed_relations = (
         ("chunk", snapshot.has_embedding_chunks, current_chunks),
         ("asset", snapshot.has_embedding_assets, current_assets),
+        ("document", snapshot.has_summary_embeddings, documents),
     )
     for subject_kind, relations, current_subjects in typed_relations:
         for relation in relations:

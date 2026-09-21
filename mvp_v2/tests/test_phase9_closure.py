@@ -23,6 +23,7 @@ from mvp_v2.application.dto.retrieval import (
 )
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.relations import RelationError, RelationKind, RelationService
+from mvp_v2.domain.schema_registry import SCHEMA_PROFILE_SHA256
 from mvp_v2.ports.media import MediaVerificationError
 from mvp_v2.presentation.app import (
     _asset_label,
@@ -247,10 +248,10 @@ def test_visible_operation_shows_timed_spinner_and_runs_logged_action(
     assert observed == [("Building…", True), "database_build"]
 
 
-def test_asset_label_uses_caption_then_local_path() -> None:
+def test_asset_label_uses_description_then_local_path() -> None:
     asset = build_valid_snapshot().assets[0]
-    assert _asset_label(asset) == "cap"
-    assert _asset_label(asset.model_copy(update={"caption": ""})) == "images/a.png"
+    assert _asset_label(asset) == "desc"
+    assert _asset_label(asset.model_copy(update={"description": ""})) == "images/a.png"
 
 
 def test_working_root_identity_changes_with_runtime_root(tmp_path: Path) -> None:
@@ -345,6 +346,12 @@ def test_database_scan_and_stale_decision_never_opens_native_db(tmp_path: Path) 
     )
     assert scan_database_manifests(tmp_path) == ((artifact, manifest),)
     assert database_is_stale(manifest, None)
+    foreign = make_database_manifest(schema_profile_sha256="f" * 64)
+    assert foreign.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
+    (artifact / "_mvp_v2_manifest.json").write_bytes(
+        canonical_json_bytes(foreign.canonical_payload())
+    )
+    assert scan_database_manifests(tmp_path) == ()
     (artifact / "_mvp_v2_manifest.json").write_text("{}")
     assert scan_database_manifests(tmp_path) == ()
 

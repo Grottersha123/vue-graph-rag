@@ -9,7 +9,9 @@ mvp_v2/src/mvp_v2/
     base.py                  IDs, hashes, strict Pydantic base types
     graph.py                 persisted node and relation models
     snapshot.py              typed aggregate of graph tables
-    schema_registry.py       one executable node/edge/property contract
+    schema_registry.py       typed core schema plus configured optional fields
+    field_extensions.py      strict optional-field config parser
+  graph_fields.json          user-editable optional node-field declarations
     invariant_indexes.py     one-pass indexes for graph validation
     invariants.py            cross-row graph validation
     chunking.py              deterministic text chunk policy

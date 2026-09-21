@@ -274,25 +274,23 @@ def test_empty_sha_requires_status_named_exactly_error() -> None:
     assert "EMPTY_SHA_REQUIRES_ERROR_STATUS" in codes(broken)
 
 
-def test_embedding_purpose_must_match_typed_owner_relation() -> None:
+def test_summary_vector_is_only_valid_for_chunk_embedding() -> None:
     snapshot = build_valid_snapshot()
     embeddings = tuple(
-        item.model_copy(
-            update={
-                "purpose": "asset_description_retrieval"
-                if item.id == "embedding-chunk"
-                else "chunk_retrieval"
-            }
-        )
+        item.model_copy(update={"summary_vector": (0.5, 0.5)})
+        if item.id == "embedding-asset"
+        else item
         for item in snapshot.embeddings
     )
+
     result = validate_graph(snapshot.model_copy(update={"embeddings": embeddings}))
+
     mismatches = [
         issue
         for issue in result.issues
-        if issue.code == "EMBEDDING_PURPOSE_OWNER_MISMATCH"
+        if issue.code == "SUMMARY_VECTOR_OWNER_MISMATCH"
     ]
-    assert len(mismatches) == 2
+    assert len(mismatches) == 1
 
 
 def test_typed_subject_identity_separates_equal_chunk_and_asset_ids() -> None:

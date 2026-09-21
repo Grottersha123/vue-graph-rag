@@ -122,7 +122,7 @@ def build_import_report(
                 + len(snapshot.assets),
             ),
             NamedCount(
-                name="Asset llm_description initialized empty",
+                name="Asset description migrated from caption",
                 count=len(snapshot.assets),
             ),
         ),

@@ -34,6 +34,7 @@ def test_registry_has_exact_graph_tables_and_directions() -> None:
         "CONTAINS_ASSET": ("Chunk", "Asset"),
         "HAS_EMBEDDING_CHUNK": ("Chunk", "Embedding"),
         "HAS_EMBEDDING_ASSET": ("Asset", "Embedding"),
+        "HAS_SUMMARY_EMBEDDING": ("Document", "Embedding"),
         "LINKS_TO": ("Document", "Document"),
         "DESCRIBES": ("Document", "Process"),
         "FOR_ROLE": ("Document", "Role"),
@@ -58,6 +59,7 @@ def test_all_node_property_types_headers_and_primary_keys_are_exact() -> None:
             ("source_url", "STRING", False),
             ("external_id", "STRING", False),
             ("is_active", "BOOLEAN", False),
+            ("summary", "STRING", False),
         ),
         "DocumentVersion": (
             ("id", "STRING", True),
@@ -73,6 +75,7 @@ def test_all_node_property_types_headers_and_primary_keys_are_exact() -> None:
             ("position", "INT64", False),
             ("content", "STRING", False),
             ("content_hash", "STRING", False),
+            ("summary", "STRING", False),
         ),
         "Asset": (
             ("id", "STRING", True),
@@ -83,8 +86,7 @@ def test_all_node_property_types_headers_and_primary_keys_are_exact() -> None:
             ("external_id", "STRING", False),
             ("sha256", "STRING", False),
             ("position", "INT64", False),
-            ("caption", "STRING", False),
-            ("llm_description", "STRING", False),
+            ("description", "STRING", False),
             ("ocr_text", "STRING", False),
         ),
         "Embedding": (
@@ -92,11 +94,11 @@ def test_all_node_property_types_headers_and_primary_keys_are_exact() -> None:
             ("provider", "STRING", False),
             ("model", "STRING", False),
             ("model_version", "STRING", False),
-            ("purpose", "STRING", False),
             ("dimension", "INT64", False),
             ("vector", "FLOAT_VECTOR", False),
             ("created_at", "TIMESTAMP", False),
             ("is_current", "BOOLEAN", False),
+            ("summary_vector", "FLOAT_VECTOR", False),
         ),
         "Role": (("id", "STRING", True), ("name", "STRING", False)),
         "Process": (
@@ -145,7 +147,7 @@ def test_registry_negative_helper_detects_bad_property_without_global_mutation()
     )
     bad_source: NodeSpec = replace(source, properties=bad_properties)
     errors = registry_errors((bad_source, *NODE_SPECS[1:]), RELATION_SPECS)
-    assert any("property names/order" in error for error in errors)
+    assert any("model fields/order" in error for error in errors)
     assert any("primary key" in error for error in errors)
     assert any("property types" in error for error in errors)
     assert NODE_SPECS[0] is source

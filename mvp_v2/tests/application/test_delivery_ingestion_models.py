@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +16,10 @@ from mvp_v2.adapters.filesystem.runtime_store import (
 from mvp_v2.adapters.ingestion import LocalInputExtractor
 from mvp_v2.adapters.ollama import OllamaAdapter
 from mvp_v2.application.chunking import ChunkPolicy, split_text
+from mvp_v2.application.document_editing import (
+    DocumentMetadataUpdate,
+    update_document_metadata,
+)
 from mvp_v2.application.ingestion import (
     IngestionError,
     IngestionService,
@@ -34,7 +39,8 @@ from mvp_v2.application.model_operations import (
     build_embeddings,
     describe_asset,
 )
-from mvp_v2.domain import graph
+from mvp_v2.domain import graph, invariants
+from mvp_v2.domain.schema_registry import NODE_SPECS, PropertySpec, ScalarType
 from mvp_v2.domain.snapshot import GraphSnapshot
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -123,7 +129,9 @@ def test_chunking_and_version_history_with_filesystem(tmp_path: Path) -> None:
     assert (tmp_path / versions[1].local_path).read_text() == text
 
 
-def test_local_path_generates_identity_and_reuses_document() -> None:
+def test_local_path_generates_identity_and_reuses_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = IngestionService(
         Extractor(ExtractedInput(content=b"content", text="content", extension=".md")),
         Store(),
@@ -134,13 +142,49 @@ def test_local_path_generates_identity_and_reuses_document() -> None:
 
     first_preview = service.preview(base_snapshot(), local_request)
     first = service.commit(base_snapshot(), first_preview, created_at=NOW).snapshot
-    second_preview = service.preview(first, local_request)
+    document_spec = next(item for item in NODE_SPECS if item.table_name == "Document")
+    configured_spec = replace(
+        document_spec,
+        properties=(
+            *document_spec.properties,
+            PropertySpec(
+                name="review_note",
+                scalar_type=ScalarType.STRING,
+                required_on_read=False,
+                default="",
+                custom=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        invariants,
+        "NODE_SPECS",
+        tuple(
+            configured_spec if item.table_name == "Document" else item
+            for item in NODE_SPECS
+        ),
+    )
+    enriched_document = first.documents[0].model_copy(
+        update={
+            "summary": "Keep this summary",
+            "custom_properties": (
+                graph.CustomProperty(name="review_note", value="keep"),
+            ),
+        }
+    )
+    enriched = first.model_copy(update={"documents": (enriched_document,)})
+    second_preview = service.preview(enriched, local_request)
+    second = service.commit(enriched, second_preview, created_at=NOW).snapshot
 
     assert first_preview.request.external_id == "local:guide.md"
     assert first_preview.document_id.startswith("doc-")
     assert first.documents[0].external_id == "local:guide.md"
     assert second_preview.document_id == first_preview.document_id
     assert second_preview.version == 2
+    assert second.documents[0].summary == "Keep this summary"
+    assert second.documents[0].custom_properties == (
+        graph.CustomProperty(name="review_note", value="keep"),
+    )
 
 
 def test_markdown_title_uses_h1_then_filename() -> None:
@@ -277,8 +321,7 @@ def test_default_deny_and_description_update() -> None:
         external_id="",
         sha256="0" * 64,
         position=0,
-        caption="caption",
-        llm_description="",
+        description="caption",
         ocr_text="ocr",
     )
     snapshot = GraphSnapshot(
@@ -341,9 +384,10 @@ def test_default_deny_and_description_update() -> None:
         model="TODO-MODEL",
         vision=model,
     )
-    assert updated.assets[0].llm_description == "A blue diagram"
+    assert updated.assets[0].description == "A blue diagram"
     assert (
-        updated.assets[0].caption == "caption" and updated.assets[0].ocr_text == "ocr"
+        updated.assets[0].description == "A blue diagram"
+        and updated.assets[0].ocr_text == "ocr"
     )
 
 
@@ -353,6 +397,7 @@ def test_missing_then_rebuild_preserves_embedding_history() -> None:
         position=0,
         content="retrieval text",
         content_hash="5db5d91e669089d47b7cfc827d10ee8e36abd7f749d000344b409ed16007b2c0",
+        summary="short retrieval summary",
     )
     snapshot = GraphSnapshot(
         source_types=(graph.SourceType(id="source-web", code="web"),),
@@ -365,6 +410,7 @@ def test_missing_then_rebuild_preserves_embedding_history() -> None:
                 source_url="",
                 external_id="doc",
                 is_active=True,
+                summary="document overview",
             ),
         ),
         document_versions=(
@@ -414,6 +460,42 @@ def test_missing_then_rebuild_preserves_embedding_history() -> None:
         ),
         model,
     )
+    edited = update_document_metadata(
+        missing,
+        (
+            DocumentMetadataUpdate(
+                document_id="doc",
+                title="Doc",
+                source_url="",
+                external_id="doc",
+                summary="updated document overview",
+                is_active=True,
+            ),
+        ),
+    )
+    old_document_embedding_id = missing.has_summary_embeddings[0].target_id
+    assert not next(
+        item for item in edited.embeddings if item.id == old_document_embedding_id
+    ).is_current
+    repaired = build_embeddings(
+        edited,
+        EmbeddingRequest(
+            identity=identity,
+            authorization=auth,
+            mode="missing",
+            generation_token="summary-edit",
+            created_at=NOW,
+        ),
+        model,
+    )
+    current_document_embeddings = {
+        item.id
+        for item in repaired.embeddings
+        if item.is_current
+        and item.id in {edge.target_id for edge in repaired.has_summary_embeddings}
+    }
+    assert len(current_document_embeddings) == 1
+
     unchanged = build_embeddings(
         missing,
         EmbeddingRequest(
@@ -436,11 +518,27 @@ def test_missing_then_rebuild_preserves_embedding_history() -> None:
         ),
         model,
     )
-    assert len(unchanged.embeddings) == 1
-    assert {(item.purpose, item.dimension) for item in rebuilt.embeddings} == {
-        ("chunk_retrieval", 2)
-    }
-    assert sorted(item.is_current for item in rebuilt.embeddings) == [False, True]
+    assert len(unchanged.embeddings) == 2
+    assert len(unchanged.has_embedding_chunks) == 1
+    assert len(unchanged.has_summary_embeddings) == 1
+    chunk_embedding_id = unchanged.has_embedding_chunks[0].target_id
+    chunk_embedding = next(
+        item for item in unchanged.embeddings if item.id == chunk_embedding_id
+    )
+    assert len(chunk_embedding.summary_vector) == 2
+    document_embedding_id = unchanged.has_summary_embeddings[0].target_id
+    document_embedding = next(
+        item for item in unchanged.embeddings if item.id == document_embedding_id
+    )
+    assert document_embedding.summary_vector == ()
+    assert {item.dimension for item in rebuilt.embeddings} == {2}
+    assert sorted(item.is_current for item in rebuilt.embeddings) == [
+        False,
+        False,
+        True,
+        True,
+    ]
+    assert model.calls == 5
 
 
 def test_ollama_parser_uses_mock_transport() -> None:

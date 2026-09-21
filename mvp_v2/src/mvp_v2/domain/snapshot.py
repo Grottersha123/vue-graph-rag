@@ -36,6 +36,7 @@ class GraphSnapshot(ContractModel):
     contains_assets: tuple[graph.ContainsAsset, ...] = ()
     has_embedding_chunks: tuple[graph.HasEmbeddingChunk, ...] = ()
     has_embedding_assets: tuple[graph.HasEmbeddingAsset, ...] = ()
+    has_summary_embeddings: tuple[graph.HasSummaryEmbedding, ...] = ()
     links_to: tuple[graph.LinksTo, ...] = ()
     describes: tuple[graph.Describes, ...] = ()
     for_roles: tuple[graph.ForRole, ...] = ()

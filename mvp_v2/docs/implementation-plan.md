@@ -21,7 +21,7 @@ Status: active implementation plan. The canonical graph contract is `docs/schema
 | `HAS_DOCUMENT.csv` | Reverse `SourceType -> Document` into `Document -> HAS_SOURCE_TYPE -> SourceType`. |
 | `DocumentVersion.csv` | Validate and import `DocumentVersion`; ownership comes only from `HAS_VERSION`. |
 | `HAS_VERSION.csv` | Import `Document -> DocumentVersion`; construct immediate-predecessor `SUPERSEDES` when absent. |
-| `Asset.csv` | Import Asset metadata, caption, and OCR. Initialize `llm_description` as empty until vision processing. |
+| `Asset.csv` | Import Asset metadata, description, and OCR. The vision operation may replace `description`. |
 | `HAS_ASSET.csv` | Import `DocumentVersion -> Asset`. |
 | `Role.csv`, `FOR_ROLE.csv` | Import directly after endpoint validation. `support` remains a Role. |
 | `Status.csv`, `HAS_STATUS.csv` | Import and validate exactly one status per version. |
@@ -62,10 +62,10 @@ the isolated runtime before the next phase is considered complete.
 - Asset type is `image` in schema v1.
 - Version numbers and IDs are never renumbered after deletion.
 - Rebuild-all retains old embeddings in the cumulative dump as `is_current=false`.
-- Graph schema version is `mvp-v2-graph-v1`; dump format is `mvp-v2-dump-v1` and
+- Current graph schema version is `mvp-v2-graph-v2`; verified v1 dumps migrate in memory; dump format is `mvp-v2-dump-v1` and
   database-manifest format is `mvp-v2-db-v1`; timestamps serialize as UTC with `Z`.
 - Dump `run_id` and database `build_id` are canonical SHA-256 identities over their
-  immutable manifest facts; each manifest accounts for all 21 registry tables.
+  immutable manifest facts; each manifest accounts for all 22 current registry tables.
 - An empty version SHA is allowed only for an errored, non-current version whose
   `HAS_STATUS` target is the error status.
 
@@ -121,7 +121,7 @@ issues, aggregate source file facts, and source-tree digest. There is no applica
 
 Publication validates the current graph and only its referenced DocumentVersion and
 Asset files through `FilesystemMediaResolver(runtime_data_root)`. It does not rehash
-uploads or orphan files. The dump writer creates all 21 CSVs plus `manifest.json` in
+uploads or orphan files. The dump writer creates all 22 current CSVs plus `manifest.json` in
 a temporary sibling and renames it to the next immutable six-digit directory. It
 assumes one local Streamlit process; it does not lock across processes or
 revalidate historical dumps.

@@ -197,8 +197,7 @@ class IngestionService:
                     external_id=item.external_id,
                     sha256=hashlib.sha256(item.content).hexdigest(),
                     position=position,
-                    caption=item.caption,
-                    llm_description="",
+                    description=item.caption,
                     ocr_text=item.ocr_text,
                 )
             )
@@ -307,14 +306,23 @@ class IngestionService:
             else item
             for item in snapshot.document_versions
         )
-        document = graph.Document(
-            id=preview.document_id,
-            title=request.title,
-            source_name=request.source_name,
-            content_format=request.kind,
-            source_url=request.source_url,
-            external_id=request.external_id,
-            is_active=True,
+        existing_document = next(
+            (item for item in snapshot.documents if item.id == preview.document_id),
+            None,
+        )
+        document_fields = {
+            "id": preview.document_id,
+            "title": request.title,
+            "source_name": request.source_name,
+            "content_format": request.kind,
+            "source_url": request.source_url,
+            "external_id": request.external_id,
+            "is_active": True,
+        }
+        document = (
+            graph.Document.model_validate(document_fields)
+            if existing_document is None
+            else existing_document.model_copy(update=document_fields)
         )
         documents = tuple(
             item for item in snapshot.documents if item.id != preview.document_id

@@ -119,7 +119,7 @@ def test_preview_maps_graph_and_is_deterministic(tmp_path: Path) -> None:
     assert first.snapshot.has_source_types == (
         graph.HasSourceType(source_id="doc-1", target_id="source-web"),
     )
-    assert first.snapshot.assets[0].llm_description == ""
+    assert first.snapshot.assets[0].description == "caption"
     assert first.snapshot.document_versions[0].local_path == "documents/doc.md"
     assert first.snapshot.assets[0].local_path == "images/image.png"
     assert not first.snapshot.chunks and not first.snapshot.embeddings

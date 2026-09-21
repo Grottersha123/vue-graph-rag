@@ -13,6 +13,7 @@ class DocumentMetadataUpdate:
     title: str
     source_url: str
     external_id: str
+    summary: str
     is_active: bool
 
 
@@ -56,6 +57,7 @@ def update_document_metadata(
             title=title,
             source_url=update.source_url.strip(),
             external_id=update.external_id.strip(),
+            summary=update.summary,
             is_active=update.is_active,
         )
         documents.append(Document.model_validate(payload))
@@ -66,7 +68,26 @@ def update_document_metadata(
     updated_documents = tuple(documents)
     if updated_documents == snapshot.documents:
         return snapshot
-    candidate = snapshot.model_copy(update={"documents": updated_documents})
+    original_documents = {item.id: item for item in snapshot.documents}
+    changed_summary_ids = {
+        item.id
+        for item in updated_documents
+        if item.summary != original_documents[item.id].summary
+    }
+    stale_embedding_ids = {
+        edge.target_id
+        for edge in snapshot.has_summary_embeddings
+        if edge.source_id in changed_summary_ids
+    }
+    embeddings = tuple(
+        item.model_copy(update={"is_current": False})
+        if item.id in stale_embedding_ids and item.is_current
+        else item
+        for item in snapshot.embeddings
+    )
+    candidate = snapshot.model_copy(
+        update={"documents": updated_documents, "embeddings": embeddings}
+    )
     if not validate_graph(candidate).is_valid:
         raise ValueError("metadata changes violate graph invariants")
     return candidate

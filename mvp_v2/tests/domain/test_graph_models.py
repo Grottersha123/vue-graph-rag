@@ -56,22 +56,22 @@ def test_entity_id_rejects_blank_and_control_characters() -> None:
 
 def test_exact_embedding_fields_and_valid_vector() -> None:
     assert tuple(Embedding.model_fields) == (
+        "custom_properties",
         "id",
         "provider",
         "model",
         "model_version",
-        "purpose",
         "dimension",
         "vector",
         "created_at",
         "is_current",
+        "summary_vector",
     )
     embedding = Embedding(
         id="embedding:one",
         provider="local",
         model="text-model",
         model_version="1",
-        purpose="chunk_retrieval",
         dimension=2,
         vector=(1.0, -2.0),
         created_at=NOW,
@@ -88,7 +88,6 @@ def test_embedding_rejects_bad_vectors(vector: tuple[float, ...]) -> None:
             provider="local",
             model="text-model",
             model_version="1",
-            purpose="chunk_retrieval",
             dimension=2,
             vector=vector,
             created_at=NOW,
@@ -102,7 +101,6 @@ def test_datetime_requires_exact_utc_and_python_datetime() -> None:
         "provider": "local",
         "model": "text-model",
         "model_version": "1",
-        "purpose": "chunk_retrieval",
         "dimension": 1,
         "vector": (1.0,),
         "is_current": True,
@@ -160,8 +158,7 @@ def test_asset_type_hash_position_and_path() -> None:
         "external_id": "",
         "sha256": SHA,
         "position": 0,
-        "caption": "",
-        "llm_description": "",
+        "description": "",
         "ocr_text": "",
     }
     assert Asset.model_validate(values).asset_type == "image"
@@ -312,7 +309,6 @@ def test_optional_text_allows_empty_but_rejects_controls_without_normalizing() -
                 "provider": "local",
                 "model": "embed",
                 "model_version": "v1",
-                "purpose": "chunk_retrieval",
                 "dimension": 1,
                 "vector": (1.0,),
                 "created_at": NOW,
@@ -331,8 +327,7 @@ def test_optional_text_allows_empty_but_rejects_controls_without_normalizing() -
                 "external_id": "",
                 "sha256": SHA,
                 "position": 0,
-                "caption": "",
-                "llm_description": "",
+                "description": "",
                 "ocr_text": "",
             },
             "mime_type",
@@ -364,12 +359,11 @@ def test_multiline_fields_preserve_lf_tabs_quotes_and_unicode() -> None:
         external_id="",
         sha256=SHA,
         position=0,
-        caption=content,
-        llm_description=content,
+        description=content,
         ocr_text=content,
     )
     assert chunk.content == content
-    assert asset.caption == content
+    assert asset.description == content
 
 
 @pytest.mark.parametrize(

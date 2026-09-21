@@ -23,7 +23,6 @@ from mvp_v2.application.dto.retrieval import (
 )
 from mvp_v2.application.manifests import (
     DATABASE_FORMAT,
-    EXPECTED_TABLE_PATHS,
     DatabaseManifest,
     DumpManifest,
     TableCount,
@@ -35,8 +34,10 @@ from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     NODE_SPECS,
     RELATION_SPECS,
+    SCHEMA_PROFILE_SHA256,
     PropertySpec,
     ScalarType,
+    VectorPolicy,
 )
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
@@ -85,7 +86,6 @@ def load_verified_dump(path: Path) -> tuple[DumpManifest, GraphSnapshot]:
     try:
         if path.is_symlink() or not path.is_dir():
             raise ValueError("invalid dump directory")
-        expected = {"manifest.json", *(str(item) for item in EXPECTED_TABLE_PATHS)}
         actual: set[str] = set()
         for entry in path.rglob("*"):
             relative = entry.relative_to(path).as_posix()
@@ -94,11 +94,17 @@ def load_verified_dump(path: Path) -> tuple[DumpManifest, GraphSnapshot]:
                     raise ValueError("dump contains non-regular entry")
                 continue
             actual.add(relative)
-        if actual != expected:
-            raise ValueError("dump file set mismatch")
         manifest_bytes = (path / "manifest.json").read_bytes()
         manifest = DumpManifest.model_validate_json(manifest_bytes)
-        if canonical_json_bytes(manifest.model_dump(mode="json")) != manifest_bytes:
+        if (
+            manifest.graph_schema_version == GRAPH_SCHEMA_VERSION
+            and manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
+        ):
+            raise ValueError("dump schema profile does not match current config")
+        expected = {"manifest.json", *(item.path for item in manifest.files)}
+        if actual != expected:
+            raise ValueError("dump file set mismatch")
+        if canonical_json_bytes(manifest.canonical_payload()) != manifest_bytes:
             raise ValueError("manifest is not canonical")
         for fact in manifest.files:
             table_file = path / fact.path
@@ -173,7 +179,11 @@ def _ladybug_scalar(value: object, prop: PropertySpec, dimension: int) -> object
         if not isinstance(value, datetime) or value.tzinfo is None:
             raise LadybugBuildError("invalid TIMESTAMP property")
         return value.astimezone(UTC).replace(tzinfo=None)
-    if dimension < 1 or not isinstance(value, (list, tuple)) or len(value) != dimension:
+    if not isinstance(value, (list, tuple)):
+        raise LadybugBuildError("invalid FLOAT_VECTOR value")
+    if prop.vector_policy is VectorPolicy.EMPTY_OR_DIMENSION and not value:
+        return None
+    if dimension < 1 or len(value) != dimension:
         raise LadybugBuildError("invalid FLOAT_VECTOR dimension")
     if any(
         isinstance(item, bool) or not isinstance(item, (int, float)) for item in value
@@ -187,10 +197,18 @@ def _ladybug_scalar(value: object, prop: PropertySpec, dimension: int) -> object
 
 def _properties(model: Any, spec: Any, dimension: int) -> dict[str, object]:
     raw = cast(dict[str, object], model.model_dump(mode="python", by_alias=True))
-    return {
-        prop.name: _ladybug_scalar(raw[prop.name], prop, dimension)
-        for prop in spec.properties
+    custom_values = {
+        item.name: item.value for item in getattr(model, "custom_properties", ())
     }
+    values: dict[str, object] = {}
+    for prop in spec.properties:
+        value = (
+            custom_values.get(prop.name, prop.default)
+            if prop.custom
+            else raw[prop.name]
+        )
+        values[prop.name] = _ladybug_scalar(value, prop, dimension)
+    return values
 
 
 def load_graph(connection: Any, snapshot: GraphSnapshot, dimension: int) -> None:
@@ -337,6 +355,7 @@ def build_database(
         manifest = DatabaseManifest(
             format=DATABASE_FORMAT,
             graph_schema_version=GRAPH_SCHEMA_VERSION,
+            schema_profile_sha256=SCHEMA_PROFILE_SHA256,
             build_id=build_id,
             database_name=database_name,
             built_at=now,
@@ -358,7 +377,7 @@ def build_database(
         db.close()
         db = None
         manifest_path = stage / DATABASE_MANIFEST
-        manifest_bytes = canonical_json_bytes(manifest.model_dump(mode="json"))
+        manifest_bytes = canonical_json_bytes(manifest.canonical_payload())
         manifest_path.write_bytes(manifest_bytes)
         parsed_manifest = DatabaseManifest.model_validate_json(
             manifest_path.read_bytes()
@@ -435,32 +454,47 @@ class LadybugAnn:
             candidate_limit = min(available, budget)
         rows = _execute(
             self._connection,
-            f"CALL QUERY_VECTOR_INDEX('Embedding', '{VECTOR_INDEX}', $vector, $k, efs := 32) YIELD node, distance RETURN node.id, node.purpose, distance",
+            f"CALL QUERY_VECTOR_INDEX('Embedding', '{VECTOR_INDEX}', $vector, $k, efs := 32) YIELD node, distance RETURN node.id, distance",
             {"vector": list(request.vector), "k": candidate_limit},
         )
+        ownership_queries = (
+            (
+                EmbeddingPurpose.CHUNK_RETRIEVAL,
+                SubjectKind.CHUNK,
+                "HAS_EMBEDDING_CHUNK",
+            ),
+            (
+                EmbeddingPurpose.ASSET_DESCRIPTION_RETRIEVAL,
+                SubjectKind.ASSET,
+                "HAS_EMBEDDING_ASSET",
+            ),
+        )
         hits = []
-        for embedding_id, purpose_raw, distance_raw in rows:
+        for embedding_id, distance_raw in rows:
             distance = float(cast(str | int | float, distance_raw))
             if not math.isfinite(distance):
                 raise LadybugCapabilityError("ANN returned non-finite distance")
-            try:
-                purpose = EmbeddingPurpose(str(purpose_raw))
-            except ValueError as error:
-                raise LadybugCapabilityError("ANN returned invalid purpose") from error
-            if purpose not in request.purposes:
+            owners: list[tuple[EmbeddingPurpose, SubjectKind, str]] = []
+            for purpose, kind, relation in ownership_queries:
+                if purpose not in request.purposes:
+                    continue
+                owner = _execute(
+                    self._connection,
+                    f"MATCH (s)-[:{relation}]->(e:Embedding {{id: $id}}) RETURN s.id",
+                    {"id": str(embedding_id)},
+                )
+                if len(owner) > 1:
+                    raise LadybugCapabilityError("embedding ownership is invalid")
+                if owner:
+                    owners.append((purpose, kind, str(owner[0][0])))
+            if not owners:
                 continue
-            kind = (
-                SubjectKind.CHUNK
-                if purpose is EmbeddingPurpose.CHUNK_RETRIEVAL
-                else SubjectKind.ASSET
-            )
-            owner_query = "MATCH (s)-[:HAS_EMBEDDING_CHUNK|HAS_EMBEDDING_ASSET]->(e:Embedding {id: $id}) RETURN s.id"
-            owner = _execute(self._connection, owner_query, {"id": str(embedding_id)})
-            if len(owner) != 1:
-                raise LadybugCapabilityError("embedding ownership is invalid")
+            if len(owners) != 1:
+                raise LadybugCapabilityError("embedding owner kind is ambiguous")
+            purpose, kind, subject_id = owners[0]
             hits.append(
                 VectorHit(
-                    subject=SubjectRef(kind=kind, id=str(owner[0][0])),
+                    subject=SubjectRef(kind=kind, id=subject_id),
                     embedding_id=str(embedding_id),
                     purpose=purpose,
                     score=1.0 - distance,

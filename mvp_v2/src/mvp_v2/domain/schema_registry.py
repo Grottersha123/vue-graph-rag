@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel
 
 from mvp_v2.domain import graph
+from mvp_v2.domain.field_extensions import ExtensionDefault, load_field_extensions
 from mvp_v2.domain.snapshot import GraphSnapshot
 
-GRAPH_SCHEMA_VERSION: Final[Literal["mvp-v2-graph-v1"]] = "mvp-v2-graph-v1"
+LEGACY_GRAPH_SCHEMA_VERSION: Final[Literal["mvp-v2-graph-v1"]] = "mvp-v2-graph-v1"
+GRAPH_SCHEMA_VERSION: Final[Literal["mvp-v2-graph-v2"]] = "mvp-v2-graph-v2"
 NODE_TABLE_NAMES = (
     "SourceType",
     "Document",
@@ -31,6 +36,7 @@ RELATION_TABLE_NAMES = (
     "CONTAINS_ASSET",
     "HAS_EMBEDDING_CHUNK",
     "HAS_EMBEDDING_ASSET",
+    "HAS_SUMMARY_EMBEDDING",
     "LINKS_TO",
     "DESCRIBES",
     "FOR_ROLE",
@@ -57,6 +63,7 @@ GraphRelationType: TypeAlias = Literal[
     "CONTAINS_ASSET",
     "HAS_EMBEDDING_CHUNK",
     "HAS_EMBEDDING_ASSET",
+    "HAS_SUMMARY_EMBEDDING",
     "LINKS_TO",
     "DESCRIBES",
     "FOR_ROLE",
@@ -72,12 +79,22 @@ class ScalarType(StrEnum):
     FLOAT_VECTOR = "FLOAT_VECTOR"
 
 
+class VectorPolicy(StrEnum):
+    NONE = "none"
+    EXACT_DIMENSION = "exact_dimension"
+    EMPTY_OR_DIMENSION = "empty_or_dimension"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PropertySpec:
     name: str
     scalar_type: ScalarType
     primary_key: bool = False
     vector_dimension_field: str | None = None
+    vector_policy: VectorPolicy = VectorPolicy.NONE
+    required_on_read: bool = True
+    default: ExtensionDefault | None = None
+    custom: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -90,7 +107,7 @@ class NodeSpec:
 
     @property
     def headers(self) -> tuple[str, ...]:
-        return _headers_for(self.model)
+        return tuple(item.name for item in self.properties)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -108,24 +125,34 @@ class RelationSpec:
 
     @property
     def headers(self) -> tuple[str, ...]:
-        return _headers_for(self.model)
+        return tuple(item.name for item in self.properties)
 
 
-def _headers_for(model: type[BaseModel]) -> tuple[str, ...]:
-    return tuple(
-        field.serialization_alias or name for name, field in model.model_fields.items()
+def _property(
+    name: str,
+    scalar_type: ScalarType,
+    *,
+    required_on_read: bool = True,
+    default: ExtensionDefault | None = None,
+    vector_policy: VectorPolicy = VectorPolicy.NONE,
+) -> PropertySpec:
+    return PropertySpec(
+        name=name,
+        scalar_type=scalar_type,
+        required_on_read=required_on_read,
+        default=default,
+        vector_policy=vector_policy,
+        vector_dimension_field=(
+            "dimension" if vector_policy is not VectorPolicy.NONE else None
+        ),
     )
-
-
-def _property(name: str, scalar_type: ScalarType) -> PropertySpec:
-    return PropertySpec(name=name, scalar_type=scalar_type)
 
 
 def _id() -> PropertySpec:
     return PropertySpec(name="id", scalar_type=ScalarType.STRING, primary_key=True)
 
 
-NODE_SPECS: tuple[NodeSpec, ...] = (
+_CORE_NODE_SPECS: tuple[NodeSpec, ...] = (
     NodeSpec(
         table_name="SourceType",
         snapshot_field="source_types",
@@ -146,6 +173,7 @@ NODE_SPECS: tuple[NodeSpec, ...] = (
             _property("source_url", ScalarType.STRING),
             _property("external_id", ScalarType.STRING),
             _property("is_active", ScalarType.BOOLEAN),
+            _property("summary", ScalarType.STRING, required_on_read=False, default=""),
         ),
     ),
     NodeSpec(
@@ -173,6 +201,7 @@ NODE_SPECS: tuple[NodeSpec, ...] = (
             _property("position", ScalarType.INT64),
             _property("content", ScalarType.STRING),
             _property("content_hash", ScalarType.STRING),
+            _property("summary", ScalarType.STRING, required_on_read=False, default=""),
         ),
     ),
     NodeSpec(
@@ -189,9 +218,12 @@ NODE_SPECS: tuple[NodeSpec, ...] = (
             _property("external_id", ScalarType.STRING),
             _property("sha256", ScalarType.STRING),
             _property("position", ScalarType.INT64),
-            _property("caption", ScalarType.STRING),
-            _property("llm_description", ScalarType.STRING),
-            _property("ocr_text", ScalarType.STRING),
+            _property(
+                "description", ScalarType.STRING, required_on_read=False, default=""
+            ),
+            _property(
+                "ocr_text", ScalarType.STRING, required_on_read=False, default=""
+            ),
         ),
     ),
     NodeSpec(
@@ -204,15 +236,21 @@ NODE_SPECS: tuple[NodeSpec, ...] = (
             _property("provider", ScalarType.STRING),
             _property("model", ScalarType.STRING),
             _property("model_version", ScalarType.STRING),
-            _property("purpose", ScalarType.STRING),
             _property("dimension", ScalarType.INT64),
-            PropertySpec(
-                name="vector",
-                scalar_type=ScalarType.FLOAT_VECTOR,
-                vector_dimension_field="dimension",
+            _property(
+                "vector",
+                ScalarType.FLOAT_VECTOR,
+                vector_policy=VectorPolicy.EXACT_DIMENSION,
             ),
             _property("created_at", ScalarType.TIMESTAMP),
             _property("is_current", ScalarType.BOOLEAN),
+            _property(
+                "summary_vector",
+                ScalarType.FLOAT_VECTOR,
+                required_on_read=False,
+                default=(),
+                vector_policy=VectorPolicy.EMPTY_OR_DIMENSION,
+            ),
         ),
     ),
     NodeSpec(
@@ -246,6 +284,64 @@ NODE_SPECS: tuple[NodeSpec, ...] = (
         ),
     ),
 )
+
+
+def build_node_specs(config_path: Path | None = None) -> tuple[NodeSpec, ...]:
+    configured = load_field_extensions(config_path)
+    known_tables = {item.table_name for item in _CORE_NODE_SPECS}
+    unknown_tables = set(configured) - known_tables
+    if unknown_tables:
+        raise ValueError(
+            f"unknown node tables in graph field config: {sorted(unknown_tables)}"
+        )
+    result: list[NodeSpec] = []
+    for spec in _CORE_NODE_SPECS:
+        core_names = {item.name for item in spec.properties}
+        extension_specs: list[PropertySpec] = []
+        for extension in configured.get(spec.table_name, ()):
+            if extension.scalar_type == "FLOAT_VECTOR" and not any(
+                item.name == "dimension" for item in spec.properties
+            ):
+                raise ValueError(
+                    f"FLOAT_VECTOR extension requires dimension in {spec.table_name}"
+                )
+            if extension.name in core_names or extension.name == "custom_properties":
+                raise ValueError(
+                    f"extension field collides with {spec.table_name}.{extension.name}"
+                )
+            extension_specs.append(
+                PropertySpec(
+                    name=extension.name,
+                    scalar_type=ScalarType(extension.scalar_type),
+                    required_on_read=False,
+                    default=extension.default,
+                    custom=True,
+                    vector_policy=(
+                        VectorPolicy.EMPTY_OR_DIMENSION
+                        if extension.scalar_type == "FLOAT_VECTOR"
+                        else VectorPolicy.NONE
+                    ),
+                    vector_dimension_field=(
+                        "dimension"
+                        if extension.scalar_type == "FLOAT_VECTOR"
+                        and any(item.name == "dimension" for item in spec.properties)
+                        else None
+                    ),
+                )
+            )
+        result.append(
+            NodeSpec(
+                table_name=spec.table_name,
+                snapshot_field=spec.snapshot_field,
+                label=spec.label,
+                model=spec.model,
+                properties=(*spec.properties, *extension_specs),
+            )
+        )
+    return tuple(result)
+
+
+NODE_SPECS: tuple[NodeSpec, ...] = build_node_specs()
 
 
 def _relation(
@@ -305,6 +401,13 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
         "Asset",
         "Embedding",
     ),
+    _relation(
+        "HAS_SUMMARY_EMBEDDING",
+        "has_summary_embeddings",
+        graph.HasSummaryEmbedding,
+        "Document",
+        "Embedding",
+    ),
     _relation("LINKS_TO", "links_to", graph.LinksTo, "Document", "Document"),
     _relation("DESCRIBES", "describes", graph.Describes, "Document", "Process"),
     _relation("FOR_ROLE", "for_roles", graph.ForRole, "Document", "Role"),
@@ -312,6 +415,36 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
 
 
 TABLE_SPECS: tuple[NodeSpec | RelationSpec, ...] = (*NODE_SPECS, *RELATION_SPECS)
+LEGACY_TABLE_NAMES: Final = tuple(
+    name for name in TABLE_NAMES if name != "HAS_SUMMARY_EMBEDDING"
+)
+
+
+def _schema_profile_sha256() -> str:
+    payload = [
+        {
+            "table": spec.table_name,
+            "properties": [
+                {
+                    "custom": prop.custom,
+                    "default": prop.default,
+                    "name": prop.name,
+                    "required_on_read": prop.required_on_read,
+                    "type": prop.scalar_type.value,
+                    "vector_policy": prop.vector_policy.value,
+                }
+                for prop in spec.properties
+            ],
+        }
+        for spec in TABLE_SPECS
+    ]
+    encoded = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+SCHEMA_PROFILE_SHA256: Final = _schema_profile_sha256()
 
 
 def registry_errors(
@@ -345,6 +478,14 @@ def registry_errors(
         names = tuple(prop.name for prop in node_spec.properties)
         if names != node_spec.headers:
             errors.append(f"property names/order do not match {node_spec.table_name}")
+        model_names = tuple(
+            name for name in node_spec.model.model_fields if name != "custom_properties"
+        )
+        declared_core_names = tuple(
+            prop.name for prop in node_spec.properties if not prop.custom
+        )
+        if model_names != declared_core_names:
+            errors.append(f"model fields/order do not match {node_spec.table_name}")
         primary_keys = tuple(prop for prop in node_spec.properties if prop.primary_key)
         if len(primary_keys) != 1 or primary_keys[0].name != "id":
             errors.append(

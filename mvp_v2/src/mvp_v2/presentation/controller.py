@@ -42,6 +42,10 @@ from mvp_v2.application.ingestion_contracts import (
 from mvp_v2.application.manifests import DATABASE_FORMAT, DatabaseManifest, DumpManifest
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
+from mvp_v2.domain.schema_registry import (
+    GRAPH_SCHEMA_VERSION,
+    SCHEMA_PROFILE_SHA256,
+)
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
 from mvp_v2.ports.media import MediaDeletionError
@@ -200,7 +204,13 @@ def scan_database_manifests(root: Path) -> tuple[tuple[Path, DatabaseManifest], 
             manifest = DatabaseManifest.model_validate_json(raw)
             if manifest.format != DATABASE_FORMAT:
                 continue
-            if canonical_json_bytes(manifest.model_dump(mode="json")) != raw:
+            if (
+                manifest.graph_schema_version != GRAPH_SCHEMA_VERSION
+                or manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
+            ):
+                continue
+            payload = manifest.canonical_payload()
+            if canonical_json_bytes(payload) != raw:
                 continue
             if not (artifact / "database.lbug").is_file():
                 continue
@@ -214,7 +224,11 @@ def database_is_stale(manifest: DatabaseManifest, dump: DumpManifest | None) -> 
     if dump is None:
         return True
     return (
-        manifest.source_dump_run_id != dump.run_id
+        manifest.graph_schema_version != GRAPH_SCHEMA_VERSION
+        or manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
+        or dump.graph_schema_version != GRAPH_SCHEMA_VERSION
+        or dump.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
+        or manifest.source_dump_run_id != dump.run_id
         or manifest.source_dump_number != dump.dump_number
         or manifest.source_dump_published_at != dump.published_at
     )

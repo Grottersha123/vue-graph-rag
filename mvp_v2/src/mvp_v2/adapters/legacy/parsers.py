@@ -181,7 +181,7 @@ class LegacyParser(LegacyTools):
                 payload["local_path"] = self._rewrite_path(
                     row["local_path"], "mvp/mvp_data/images/", "images/"
                 )
-                payload["llm_description"] = ""
+                payload["description"] = str(payload.pop("caption", ""))
                 values.append(graph.Asset.model_validate(payload))
             except (ValueError, ValidationError) as error:
                 issues.append(

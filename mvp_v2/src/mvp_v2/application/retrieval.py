@@ -115,7 +115,7 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
             e.source_id for e in snapshot.has_assets if e.target_id == hit.subject.id
         )
         owner = owners[0] if len(owners) == 1 else None
-        text = asset.llm_description if asset else ""
+        text = asset.description if asset else ""
         matched_chunk_position = None
         subject_exists = asset is not None and len(owners) == 1
     versions = {x.id: x for x in snapshot.document_versions}

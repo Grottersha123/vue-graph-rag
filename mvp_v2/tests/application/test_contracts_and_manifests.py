@@ -31,7 +31,11 @@ from mvp_v2.application.manifests import (
     compute_database_build_id,
     compute_dump_run_id,
 )
-from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
+from mvp_v2.domain.schema_registry import (
+    GRAPH_SCHEMA_VERSION,
+    SCHEMA_PROFILE_SHA256,
+    TABLE_NAMES,
+)
 
 NOW = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 SHA = "b" * 64
@@ -81,6 +85,10 @@ def make_database_manifest(**changes: object) -> DatabaseManifest:
         vision_model=values["vision_model"],  # type: ignore[arg-type]
         vision_model_version=values["vision_model_version"],  # type: ignore[arg-type]
         row_counts=values["row_counts"],  # type: ignore[arg-type]
+        graph_schema_version=values["graph_schema_version"],  # type: ignore[arg-type]
+        schema_profile_sha256=values.get(
+            "schema_profile_sha256", SCHEMA_PROFILE_SHA256
+        ),  # type: ignore[arg-type]
     )
     return DatabaseManifest.model_validate(values)
 
@@ -137,7 +145,8 @@ def test_dump_manifest_requires_exact_registry_files_and_canonical_order() -> No
     assert run_id == compute_dump_run_id(1, NOW, tuple(reversed(files)))
     manifest = DumpManifest(
         format=DUMP_FORMAT,
-        graph_schema_version="mvp-v2-graph-v1",
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+        schema_profile_sha256=SCHEMA_PROFILE_SHA256,
         dump_number=1,
         published_at=NOW,
         run_id=run_id,

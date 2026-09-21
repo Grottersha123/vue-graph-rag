@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from typing import Literal, cast
+from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
 from mvp_v2.application.ingestion_contracts import EmbeddingRequest, ModelAuthorization
 from mvp_v2.domain import graph
@@ -40,7 +41,7 @@ def describe_asset(
         raise ModelOperationError("vision model returned an empty description")
     try:
         updated_asset = graph.Asset.model_validate(
-            {**matching[0].model_dump(), "llm_description": description}
+            {**matching[0].model_dump(), "description": description}
         )
         assets = tuple(
             updated_asset if item.id == asset_id else item for item in snapshot.assets
@@ -50,6 +51,23 @@ def describe_asset(
         raise ModelOperationError(
             "vision model returned an invalid description"
         ) from error
+
+
+SubjectKind: TypeAlias = Literal["chunk", "asset", "document"]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _EmbeddingSubject:
+    id: str
+    kind: SubjectKind
+    text: str
+    summary: str = ""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _BuiltVectors:
+    vector: tuple[float, ...]
+    summary_vector: tuple[float, ...] = ()
 
 
 def build_embeddings(
@@ -70,123 +88,177 @@ def build_embeddings(
     selected = (
         subjects
         if request.mode == "all"
-        else tuple(item for item in subjects if (item[0], item[1]) not in existing)
+        else tuple(item for item in subjects if (item.id, item.kind) not in existing)
     )
-    new_ids = {
-        stable_id(
-            "embedding",
-            subject_id,
-            purpose,
-            identity.provider,
-            identity.model,
-            identity.model_version,
-            str(identity.dimension),
-            request.generation_token,
-        )
-        for subject_id, purpose, _ in selected
-    }
+    new_ids = {_embedding_id(item, request) for item in selected}
     occupied_ids = {item.id for item in snapshot.embeddings}
     if new_ids & occupied_ids:
         raise ModelOperationError("generation token would duplicate embedding history")
-    vectors: list[tuple[float, ...]] = []
-    for offset in range(0, len(selected), request.batch_size):
-        batch = selected[offset : offset + request.batch_size]
-        returned = model.embed(
-            texts=tuple(item[2] for item in batch), model=identity.model
-        )
-        if len(returned) != len(batch):
-            raise ModelOperationError("embedding response cardinality mismatch")
-        for vector in returned:
-            if len(vector) != identity.dimension or any(
-                isinstance(value, bool) or not math.isfinite(value) for value in vector
-            ):
-                raise ModelOperationError("embedding vector is invalid")
-        vectors.extend(returned)
+
+    vectors = _build_vectors(selected, request, model)
     embeddings = list(snapshot.embeddings)
     if request.mode == "all":
-        relevant_ids = {
-            embedding_id
-            for key, embedding_id in existing.items()
-            if key in {(item[0], item[1]) for item in selected}
-        }
+        relevant_ids = set(existing.values())
         embeddings = [
             item.model_copy(update={"is_current": False})
             if item.id in relevant_ids
             else item
             for item in embeddings
         ]
-    chunk_edges = list(snapshot.has_embedding_chunks)
-    asset_edges = list(snapshot.has_embedding_assets)
-    for (subject_id, purpose, _), vector in zip(selected, vectors, strict=True):
-        embedding_id = stable_id(
-            "embedding",
-            subject_id,
-            purpose,
-            identity.provider,
-            identity.model,
-            identity.model_version,
-            str(identity.dimension),
-            request.generation_token,
+    relation_updates: dict[SubjectKind, list[object]] = {
+        "chunk": list(snapshot.has_embedding_chunks),
+        "asset": list(snapshot.has_embedding_assets),
+        "document": list(snapshot.has_summary_embeddings),
+    }
+    relation_models = {
+        "chunk": graph.HasEmbeddingChunk,
+        "asset": graph.HasEmbeddingAsset,
+        "document": graph.HasSummaryEmbedding,
+    }
+    for subject, built in zip(selected, vectors, strict=True):
+        embedding_id = _embedding_id(subject, request)
+        embeddings.append(
+            graph.Embedding(
+                id=embedding_id,
+                provider=identity.provider,
+                model=identity.model,
+                model_version=identity.model_version,
+                dimension=identity.dimension,
+                vector=built.vector,
+                created_at=request.created_at,
+                is_current=True,
+                summary_vector=built.summary_vector,
+            )
         )
-        typed_purpose = cast(
-            Literal["chunk_retrieval", "asset_description_retrieval"], purpose
+        relation_updates[subject.kind].append(
+            relation_models[subject.kind].model_validate(
+                {"from": subject.id, "to": embedding_id}
+            )
         )
-        embedding = graph.Embedding(
-            id=embedding_id,
-            provider=identity.provider,
-            model=identity.model,
-            model_version=identity.model_version,
-            purpose=typed_purpose,
-            dimension=identity.dimension,
-            vector=vector,
-            created_at=request.created_at,
-            is_current=True,
-        )
-        embeddings.append(embedding)
-        edge = {"from": subject_id, "to": embedding_id}
-        if purpose == "chunk_retrieval":
-            chunk_edges.append(graph.HasEmbeddingChunk.model_validate(edge))
-        else:
-            asset_edges.append(graph.HasEmbeddingAsset.model_validate(edge))
     return _validated_snapshot(
         snapshot.model_copy(
             update={
                 "embeddings": tuple(embeddings),
-                "has_embedding_chunks": tuple(chunk_edges),
-                "has_embedding_assets": tuple(asset_edges),
+                "has_embedding_chunks": tuple(relation_updates["chunk"]),
+                "has_embedding_assets": tuple(relation_updates["asset"]),
+                "has_summary_embeddings": tuple(relation_updates["document"]),
             }
         )
     )
 
 
-def _subjects(snapshot: GraphSnapshot) -> tuple[tuple[str, str, str], ...]:
-    values = [(item.id, "chunk_retrieval", item.content) for item in snapshot.chunks]
+def _embedding_id(subject: _EmbeddingSubject, request: EmbeddingRequest) -> str:
+    identity = request.identity
+    return stable_id(
+        "embedding",
+        subject.id,
+        subject.kind,
+        identity.provider,
+        identity.model,
+        identity.model_version,
+        str(identity.dimension),
+        request.generation_token,
+    )
+
+
+def _build_vectors(
+    subjects: tuple[_EmbeddingSubject, ...],
+    request: EmbeddingRequest,
+    model: EmbeddingModel,
+) -> tuple[_BuiltVectors, ...]:
+    primary = _embed_texts(tuple(item.text for item in subjects), request, model)
+    summaries = tuple(
+        (index, item.summary)
+        for index, item in enumerate(subjects)
+        if item.kind == "chunk" and item.summary.strip()
+    )
+    summary_vectors = _embed_texts(tuple(text for _, text in summaries), request, model)
+    summary_by_index = {
+        index: vector
+        for (index, _), vector in zip(summaries, summary_vectors, strict=True)
+    }
+    return tuple(
+        _BuiltVectors(
+            vector=vector,
+            summary_vector=summary_by_index.get(index, ()),
+        )
+        for index, vector in enumerate(primary)
+    )
+
+
+def _embed_texts(
+    texts: tuple[str, ...],
+    request: EmbeddingRequest,
+    model: EmbeddingModel,
+) -> tuple[tuple[float, ...], ...]:
+    vectors: list[tuple[float, ...]] = []
+    for offset in range(0, len(texts), request.batch_size):
+        batch = texts[offset : offset + request.batch_size]
+        returned = model.embed(texts=batch, model=request.identity.model)
+        if len(returned) != len(batch):
+            raise ModelOperationError("embedding response cardinality mismatch")
+        for vector in returned:
+            if len(vector) != request.identity.dimension or any(
+                isinstance(value, bool) or not math.isfinite(value) for value in vector
+            ):
+                raise ModelOperationError("embedding vector is invalid")
+        vectors.extend(returned)
+    return tuple(vectors)
+
+
+def _subjects(snapshot: GraphSnapshot) -> tuple[_EmbeddingSubject, ...]:
+    values = [
+        _EmbeddingSubject(
+            id=item.id,
+            kind="chunk",
+            text=item.content,
+            summary=item.summary,
+        )
+        for item in snapshot.chunks
+    ]
     values.extend(
-        (
-            item.id,
-            "asset_description_retrieval",
-            f"Image description:\n{item.llm_description.strip()}",
+        _EmbeddingSubject(
+            id=item.id,
+            kind="asset",
+            text=f"Image description:\n{item.description.strip()}",
         )
         for item in snapshot.assets
-        if item.llm_description.strip()
+        if item.description.strip()
     )
-    return tuple(sorted(values, key=lambda item: (item[0], item[1])))
+    values.extend(
+        _EmbeddingSubject(
+            id=item.id,
+            kind="document",
+            text=f"Document summary:\n{item.summary.strip()}",
+        )
+        for item in snapshot.documents
+        if item.summary.strip()
+    )
+    return tuple(sorted(values, key=lambda item: (item.id, item.kind)))
 
 
 def _current_keys(
     snapshot: GraphSnapshot, provider: str, model: str, version: str, dimension: int
-) -> dict[tuple[str, str], str]:
+) -> dict[tuple[str, SubjectKind], str]:
     embeddings = {item.id: item for item in snapshot.embeddings}
-    result: dict[tuple[str, str], str] = {}
-    for relation in (*snapshot.has_embedding_chunks, *snapshot.has_embedding_assets):
-        item = embeddings.get(relation.target_id)
-        if (
-            item is not None
-            and item.is_current
-            and (item.provider, item.model, item.model_version, item.dimension)
-            == (provider, model, version, dimension)
-        ):
-            result[(relation.source_id, item.purpose)] = item.id
+    relations: tuple[tuple[SubjectKind, tuple[graph.Relation, ...]], ...] = (
+        ("chunk", snapshot.has_embedding_chunks),
+        ("asset", snapshot.has_embedding_assets),
+        ("document", snapshot.has_summary_embeddings),
+    )
+    result: dict[tuple[str, SubjectKind], str] = {}
+    for kind, typed_relations in relations:
+        for relation in typed_relations:
+            source_id = relation.source_id
+            target_id = relation.target_id
+            item = embeddings.get(target_id)
+            if (
+                item is not None
+                and item.is_current
+                and (item.provider, item.model, item.model_version, item.dimension)
+                == (provider, model, version, dimension)
+            ):
+                result[(source_id, kind)] = item.id
     return result
 
 

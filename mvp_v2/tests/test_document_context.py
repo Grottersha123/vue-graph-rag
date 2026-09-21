@@ -66,9 +66,7 @@ def test_hydration_uses_bounded_neighbor_window_for_large_document() -> None:
         graph.HasChunk.model_validate({"from": "version", "to": chunk.id})
         for chunk in chunks
     )
-    snapshot = snapshot.model_copy(
-        update={"chunks": chunks, "has_chunks": has_chunks}
-    )
+    snapshot = snapshot.model_copy(update={"chunks": chunks, "has_chunks": has_chunks})
     hit = VectorHit(
         subject=SubjectRef(kind=SubjectKind.CHUNK, id="chunk-1"),
         embedding_id="embedding-chunk",
@@ -117,9 +115,7 @@ SPACE = EmbeddingSpaceIdentity(
 
 
 def _manifest() -> DatabaseManifest:
-    counts = tuple(
-        TableCount(table=name, count=0) for name in TABLE_NAMES
-    )
+    counts = tuple(TableCount(table=name, count=0) for name in TABLE_NAMES)
     values: dict[str, Any] = dict(
         database_name="active",
         built_at=NOW,

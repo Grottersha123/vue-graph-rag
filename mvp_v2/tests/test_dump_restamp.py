@@ -18,7 +18,11 @@ from mvp_v2.application.manifests import (
     DumpManifest,
     compute_dump_run_id,
 )
-from mvp_v2.domain.schema_registry import RELATION_SPECS
+from mvp_v2.domain.schema_registry import (
+    GRAPH_SCHEMA_VERSION,
+    RELATION_SPECS,
+    SCHEMA_PROFILE_SHA256,
+)
 from tests.factories import build_valid_snapshot
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
@@ -30,7 +34,8 @@ def _build_dump(tmp_path: Path) -> tuple[Path, str]:
     run_id = compute_dump_run_id(7, NOW, entries)
     manifest = DumpManifest(
         format=DUMP_FORMAT,
-        graph_schema_version="mvp-v2-graph-v1",
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+        schema_profile_sha256=SCHEMA_PROFILE_SHA256,
         dump_number=7,
         published_at=NOW,
         run_id=run_id,
@@ -56,7 +61,7 @@ def _rewrite(dump: Path, table: str, rows: list[dict[str, str]]) -> None:
         writer = csv.writer(stream, dialect="excel", lineterminator="\r\n")
         writer.writerow(header)
         for row in rows:
-            writer.writerow([row[column] for column in header])
+            writer.writerow([row.get(column, "") for column in header])
 
 
 def test_healthy_dump_needs_no_repairs(tmp_path: Path) -> None:

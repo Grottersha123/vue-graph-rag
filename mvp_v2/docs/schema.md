@@ -53,9 +53,10 @@ The UTC publication timestamp is stored in `manifest.json`; dump directory names
 only the sequential number.
 
 Manifest contracts are versioned independently from graph properties. The graph
-schema version is `mvp-v2-graph-v1`, dump manifests use `mvp-v2-dump-v1`, and
-database manifests use `mvp-v2-db-v1`. A dump manifest lists exactly the 21 graph
-CSV tables. Its `run_id` hashes the immutable dump identity and file facts. A
+current schema version is `mvp-v2-graph-v2`, dump manifests use
+`mvp-v2-dump-v1`, and database manifests use `mvp-v2-db-v1`. A current dump
+manifest lists exactly the 22 graph CSV tables and includes the active schema-profile
+SHA-256. Verified v1 dumps are migrated in memory and are never rewritten. Its `run_id` hashes the immutable dump identity and file facts. A
 database manifest records the source dump `run_id`; its `build_id` hashes all
 immutable database identity and row-count facts in canonical table-name order.
 
@@ -75,6 +76,7 @@ flowchart LR
     C -->|CONTAINS_ASSET| A
     C -->|HAS_EMBEDDING_CHUNK| E1[Embedding]
     A -->|HAS_EMBEDDING_ASSET| E2[Embedding]
+    D -->|HAS_SUMMARY_EMBEDDING| E3[Embedding]
     D -->|LINKS_TO| D2[Document]
     D -->|DESCRIBES| P[Process]
     D -->|FOR_ROLE| R[Role]
@@ -91,8 +93,8 @@ edge to the immediately preceding version of the same Document.
 
 ## Node properties
 
-No properties may be added to `Embedding` without a new owner-approved schema
-version.
+Typed core properties are defined below. Additional optional scalar properties can
+be declared in `src/mvp_v2/graph_fields.json`; see `docs/graph-fields.md`.
 
 ### SourceType
 
@@ -113,6 +115,7 @@ content_format STRING
 source_url STRING
 external_id STRING
 is_active BOOLEAN
+summary STRING
 ```
 
 `Document` does not duplicate a scalar `source_type`. The canonical classification
@@ -144,6 +147,7 @@ id STRING PRIMARY KEY
 position INT64
 content STRING
 content_hash STRING
+summary STRING
 ```
 
 Chunking is deterministic and intentionally simple. A Chunk belongs to exactly one
@@ -160,8 +164,7 @@ local_path STRING
 external_id STRING
 sha256 STRING
 position INT64
-caption STRING
-llm_description STRING
+description STRING
 ocr_text STRING
 ```
 
@@ -186,19 +189,18 @@ id STRING PRIMARY KEY
 provider STRING
 model STRING
 model_version STRING
-purpose STRING
 dimension INT64
 vector FLOAT[N]
 created_at TIMESTAMP
 is_current BOOLEAN
+summary_vector FLOAT[N]
 ```
 
-These are exactly the approved Embedding properties. Subject ownership is expressed
-only by `HAS_EMBEDDING_CHUNK` or `HAS_EMBEDDING_ASSET`.
-
-Allowed retrieval purposes distinguish text chunks from image descriptions while
-using the same text embedding model. Purpose does not make vectors from different
-models comparable.
+Subject ownership and vector meaning are inferred from exactly one typed relation:
+`HAS_EMBEDDING_CHUNK`, `HAS_EMBEDDING_ASSET`, or `HAS_SUMMARY_EMBEDDING`.
+`summary_vector` is populated only for Chunk embeddings; it is empty for Asset and
+Document embeddings. Summary vectors are stored but are not queried by the current
+search workflow.
 
 ### Role
 
@@ -245,13 +247,14 @@ A dump must fail validation unless all applicable rules hold:
 4. Every DocumentVersion has exactly one `HAS_STATUS` relation.
 5. Every Chunk belongs to exactly one DocumentVersion.
 6. Every Asset belongs to exactly one DocumentVersion.
-7. Every Embedding is owned by exactly one Chunk or one Asset, never both.
-8. A Chunk or Asset whose owning DocumentVersion is current has at most one current
+7. Every Embedding is owned by exactly one Chunk, Asset, or Document, never more than one kind.
+8. Only Chunk-owned Embeddings may contain a non-empty `summary_vector`.
+9. A Chunk, Asset, or Document has at most one current
    Embedding matching the target LadybugDB identity: provider, model, model_version,
    and dimension.
-9. Every relation endpoint exists and duplicate typed edges are rejected.
-10. `CONTAINS_ASSET` is optional and both nodes must belong to the same version.
-11. Image files resolve only under the configured media root and must match SHA-256.
+10. Every relation endpoint exists and duplicate typed edges are rejected.
+11. `CONTAINS_ASSET` is optional and both nodes must belong to the same version.
+12. Image files resolve only under the configured media root and must match SHA-256.
 
 ## Vector-index contract
 
@@ -271,9 +274,10 @@ selected identity are loaded into LadybugDB and its ANN projection. Historical
 DocumentVersions may be loaded as graph history. Historical Embeddings remain in the
 selected cumulative dump but are not loaded into the query DB.
 
-Chunks and Asset descriptions may share one ANN index because the same final text
-embedding model produces both vectors. Relation type and `purpose` identify the
-result modality.
+Chunks and Asset descriptions share the current ANN index because the same final text
+embedding model produces both vectors. The incoming typed relation identifies the
+result modality. Document-summary and Chunk-summary vectors are stored for a later
+search phase and are not queried yet.
 
 Changing model or dimension requires a full rebuild into another LadybugDB (or an
 explicit safe replacement of the selected DB). Existing DB files remain selectable

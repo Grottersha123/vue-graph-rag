@@ -97,6 +97,7 @@ def test_update_document_metadata_changes_editable_fields() -> None:
                 title=" Updated title ",
                 source_url=" https://example.test/source ",
                 external_id=" guide-1 ",
+                summary="",
                 is_active=False,
             ),
         ),
@@ -127,6 +128,7 @@ def test_update_document_metadata_rejects_duplicate_external_ids() -> None:
             title=document.title,
             source_url=document.source_url,
             external_id="duplicate",
+            summary="",
             is_active=document.is_active,
         )
         for document in snapshot.documents

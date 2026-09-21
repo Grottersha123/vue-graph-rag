@@ -113,7 +113,7 @@ def _environment_dimension() -> int:
 
 
 def _asset_label(asset: Asset) -> str:
-    return asset.caption.strip() or asset.local_path
+    return asset.description.strip() or asset.local_path
 
 
 def _action_button(
@@ -509,6 +509,7 @@ def _metadata_updates_from_editor(value: Any) -> tuple[DocumentMetadataUpdate, .
                 title=str(record.get("title", "")),
                 source_url=str(record.get("source_url", "")),
                 external_id=str(record.get("external_id", "")),
+                summary=str(record.get("summary", "")),
                 is_active=is_active,
             )
         )
@@ -528,6 +529,7 @@ def _document_metadata_diff(
             "title": " ".join(update.title.split()),
             "source_url": update.source_url.strip(),
             "external_id": update.external_id.strip(),
+            "summary": update.summary,
             "is_active": update.is_active,
         }
         for field, after in proposed.items():
@@ -770,6 +772,7 @@ def _documents(config: UiRuntimeConfig | None) -> None:
                 "title": item.document.title,
                 "source_url": item.document.source_url,
                 "external_id": item.document.external_id,
+                "summary": item.document.summary,
                 "format": item.document.content_format,
                 "local_path": "" if item.version is None else item.version.local_path,
                 "version": None if item.version is None else item.version.version,

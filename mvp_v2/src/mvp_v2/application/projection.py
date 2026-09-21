@@ -24,21 +24,13 @@ def active_projection(
     assets = {e.target_id for e in snapshot.has_assets if e.source_id in versions}
     embeddings_by_id = {x.id: x for x in snapshot.embeddings}
     owned: set[str] = set()
-    for edge in snapshot.has_embedding_chunks:
-        item = embeddings_by_id.get(edge.target_id)
-        if (
-            edge.source_id in chunks
-            and item is not None
-            and item.purpose == "chunk_retrieval"
-        ):
+    for chunk_edge in snapshot.has_embedding_chunks:
+        item = embeddings_by_id.get(chunk_edge.target_id)
+        if chunk_edge.source_id in chunks and item is not None:
             owned.add(item.id)
     for asset_edge in snapshot.has_embedding_assets:
         item = embeddings_by_id.get(asset_edge.target_id)
-        if (
-            asset_edge.source_id in assets
-            and item is not None
-            and item.purpose == "asset_description_retrieval"
-        ):
+        if asset_edge.source_id in assets and item is not None:
             owned.add(item.id)
     embeddings = {
         x.id

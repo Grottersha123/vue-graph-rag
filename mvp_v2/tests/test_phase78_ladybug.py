@@ -28,7 +28,7 @@ def test_registry_generates_exact_ladybug_ddl_counts() -> None:
     nodes = node_ddl(2)
     relations = relation_ddl()
     assert len(nodes) == 9
-    assert len(relations) == 12
+    assert len(relations) == 13
     assert all(value.startswith("CREATE NODE TABLE ") for value in nodes)
     assert all(value.startswith("CREATE REL TABLE ") for value in relations)
 
@@ -86,6 +86,13 @@ def test_real_ladybug_load_counts_timestamp_vector_and_reopens(tmp_path: Path) -
     path.mkdir()
     database_path = path / "database.lbug"
     snapshot = build_valid_snapshot()
+    embeddings = tuple(
+        item.model_copy(update={"summary_vector": (0.25, 0.75)})
+        if item.id == "embedding-chunk"
+        else item
+        for item in snapshot.embeddings
+    )
+    snapshot = snapshot.model_copy(update={"embeddings": embeddings})
     if importlib.util.find_spec("ladybug") is None:
         pytest.skip("ladybug 0.19.1 is unavailable in this test interpreter")
     ladybug = importlib.import_module("ladybug")
@@ -105,12 +112,20 @@ def test_real_ladybug_load_counts_timestamp_vector_and_reopens(tmp_path: Path) -
         assert _all(connection.execute(query)) == [[expected]]
     row = _all(
         connection.execute(
-            "MATCH (e:Embedding {id: 'embedding-chunk'}) RETURN e.created_at, e.vector"
+            "MATCH (e:Embedding {id: 'embedding-chunk'}) "
+            "RETURN e.created_at, e.vector, e.summary_vector"
         )
     )[0]
     assert isinstance(row[0], datetime)
     assert row[0].tzinfo is None
     assert list(cast(Iterable[object], row[1])) == [1.0, 2.5]
+    assert list(cast(Iterable[object], row[2])) == [0.25, 0.75]
+    asset_summary = _all(
+        connection.execute(
+            "MATCH (e:Embedding {id: 'embedding-asset'}) RETURN e.summary_vector"
+        )
+    )[0][0]
+    assert asset_summary is None
     connection.close()
     database.close()
     (path / "_mvp_v2_manifest.json").write_bytes(b"{}")

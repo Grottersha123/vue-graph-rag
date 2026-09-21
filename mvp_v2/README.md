@@ -30,7 +30,7 @@ A blocking report, approval mismatch, invalid graph, or missing/changed graph-re
 DocumentVersion or Asset file blocks publication. Uploads and other orphan source
 files are not rechecked at publication.
 
-`FilesystemDumpRepository` writes 21 canonical CSV tables and `manifest.json` to a
+`FilesystemDumpRepository` writes 22 canonical CSV tables and `manifest.json` to a
 temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the next
 number after the highest valid six-digit dump directory and cleans its failed staging
 directory. It assumes one local Streamlit process; it has no inter-process lock.
@@ -40,11 +40,11 @@ No preview copies data or publishes a dump.
 
 `IngestionService` previews URL/PDF/Markdown/HTML/image-collection inputs without mutation, then commits a new immutable `GraphSnapshot` and confined runtime files. Exact `external_id` (or URL when no external ID is supplied) drives document identity. Versions and embedding history are retained.
 
-Local model operations require `ModelAuthorization(allow=True, operation=...)`. Configure exact Ollama model and version values at the application boundary (`TODO-MODEL`); there is no default model or cloud fallback. Asset retrieval embeds the deterministic text `Image description:\n{llm_description}` and requires a nonblank description. Live Ollama/model quality and installed PDF CLI validation remain operator tasks.
+Local model operations require `ModelAuthorization(allow=True, operation=...)`. Configure exact Ollama model and version values at the application boundary (`TODO-MODEL`); there is no default model or cloud fallback. Asset retrieval embeds the deterministic text `Image description:\n{description}` and requires a nonblank description. Live Ollama/model quality and installed PDF CLI validation remain operator tasks.
 
 ## Ladybug database and vector provisioning
 
-The database is an **active evidence projection**: active Documents, their current DocumentVersion, owned Chunks/Assets, exact-current embedding-space Embeddings, and only linked SourceType/Status/Role/Process metadata. Historical versions, other embedding spaces, and dangling ownership edges are excluded. Media paths remain references; image bytes are never loaded. Builds refuse overwrite and require a direct `.lbdb` child of an existing real configured root. They stage beside the target, verify all 21 counts and ANN smoke, close and reopen the database, write and validate canonical `_mvp_v2_manifest.json` inside the staged database directory, then publish that one directory with one atomic rename.
+The database is an **active evidence projection**: active Documents, their current DocumentVersion, owned Chunks/Assets, exact-current embedding-space Embeddings, and only linked SourceType/Status/Role/Process metadata. Historical versions, other embedding spaces, and dangling ownership edges are excluded. Media paths remain references; image bytes are never loaded. Builds refuse overwrite and require a direct `.lbdb` child of an existing real configured root. They stage beside the target, verify all 22 counts and ANN smoke, close and reopen the database, write and validate canonical `_mvp_v2_manifest.json` inside the staged database directory, then publish that one directory with one atomic rename.
 
 Vector provisioning is an explicit operator-only network side effect. Run it once with the same `HOME` used by the application:
 

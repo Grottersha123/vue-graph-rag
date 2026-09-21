@@ -8,7 +8,10 @@ from pathlib import Path
 from mvp_v2.adapters.csv.snapshot import CsvSnapshotError, write_snapshot
 from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.manifests import DUMP_FORMAT, DumpManifest, compute_dump_run_id
-from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION
+from mvp_v2.domain.schema_registry import (
+    GRAPH_SCHEMA_VERSION,
+    SCHEMA_PROFILE_SHA256,
+)
 from mvp_v2.domain.snapshot import GraphSnapshot
 
 
@@ -45,13 +48,19 @@ class FilesystemDumpRepository:
             manifest = DumpManifest(
                 format=DUMP_FORMAT,
                 graph_schema_version=GRAPH_SCHEMA_VERSION,
+                schema_profile_sha256=SCHEMA_PROFILE_SHA256,
                 dump_number=number,
                 published_at=published_at,
-                run_id=compute_dump_run_id(number, published_at, entries),
+                run_id=compute_dump_run_id(
+                    number,
+                    published_at,
+                    entries,
+                    schema_profile_sha256=SCHEMA_PROFILE_SHA256,
+                ),
                 files=entries,
             )
             (stage / "manifest.json").write_bytes(
-                canonical_json_bytes(manifest.model_dump(mode="json"))
+                canonical_json_bytes(manifest.canonical_payload())
             )
             stage.rename(final)
             published = True

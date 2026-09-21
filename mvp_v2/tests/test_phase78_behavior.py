@@ -6,7 +6,12 @@ from typing import Any, cast
 
 import pytest
 
-from mvp_v2.adapters.ladybug import LadybugAnn, LadybugBuildError
+from mvp_v2.adapters.csv.snapshot import write_snapshot
+from mvp_v2.adapters.ladybug import (
+    LadybugAnn,
+    LadybugBuildError,
+    load_verified_dump,
+)
 from mvp_v2.application.deletion import apply_deletion, preview_deletion
 from mvp_v2.application.deletion_orchestration import DeletionService
 from mvp_v2.application.dto.deletion import (
@@ -14,6 +19,7 @@ from mvp_v2.application.dto.deletion import (
     DeletionCommand,
     GraphNodeRef,
 )
+from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -54,9 +60,7 @@ def _manifest(
     space: EmbeddingSpaceIdentity = SPACE, *, embedding_count: int = 0
 ) -> DatabaseManifest:
     counts = tuple(
-        TableCount(
-            table=name, count=embedding_count if name == "Embedding" else 0
-        )
+        TableCount(table=name, count=embedding_count if name == "Embedding" else 0)
         for name in TABLE_NAMES
     )
     values: dict[str, Any] = dict(
@@ -99,11 +103,24 @@ def test_projection_excludes_inactive_historical_and_wrong_embeddings() -> None:
     other = source.embeddings[0].model_copy(
         update={"id": "other", "model_version": "v2"}
     )
+    summary_embedding = source.embeddings[0].model_copy(
+        update={"id": "document-summary", "summary_vector": ()}
+    )
     mixed = source.model_copy(
         update={
             "documents": (*source.documents, inactive),
             "document_versions": (*source.document_versions, historical),
-            "embeddings": (*source.embeddings, noncurrent, other),
+            "embeddings": (
+                *source.embeddings,
+                noncurrent,
+                other,
+                summary_embedding,
+            ),
+            "has_summary_embeddings": (
+                graph.HasSummaryEmbedding.model_validate(
+                    {"from": "document", "to": "document-summary"}
+                ),
+            ),
         }
     )
     projected = active_projection(mixed, SPACE)
@@ -141,12 +158,16 @@ class _Connection:
         if "QUERY_VECTOR_INDEX" in query:
             return _Result(
                 [
-                    ["embedding-chunk", "chunk_retrieval", 0.25],
-                    ["embedding-asset", "asset_description_retrieval", 0.25],
+                    ["embedding-chunk", 0.25],
+                    ["embedding-asset", 0.25],
                 ]
             )
-        identifier = "chunk" if "HAS_EMBEDDING_CHUNK" in query else "asset"
-        return _Result([[identifier]])
+        embedding_id = str((parameters or {}).get("id", ""))
+        if "HAS_EMBEDDING_CHUNK" in query and embedding_id == "embedding-chunk":
+            return _Result([["chunk"]])
+        if "HAS_EMBEDDING_ASSET" in query and embedding_id == "embedding-asset":
+            return _Result([["asset"]])
+        return _Result([])
 
 
 def test_ann_rejects_identity_and_constructed_bad_dimension_before_execute() -> None:
@@ -216,11 +237,9 @@ def test_ann_subset_purpose_uses_bounded_overfetch_and_stops_at_limit() -> None:
     vector_call = next(
         call for call in connection.calls if "QUERY_VECTOR_INDEX" in call[0]
     )
-    ownership_calls = [
-        call for call in connection.calls if "HAS_EMBEDDING_" in call[0]
-    ]
+    ownership_calls = [call for call in connection.calls if "HAS_EMBEDDING_" in call[0]]
     assert vector_call[1] == {"vector": [1.0, 2.0], "k": 10}
-    assert len(ownership_calls) == 1
+    assert len(ownership_calls) == 2
     assert [hit.embedding_id for hit in hits] == ["embedding-asset"]
 
 
@@ -473,11 +492,21 @@ def test_asset_and_embedding_deletion_semantics_and_paths() -> None:
 
 
 def test_document_cascade_removes_owned_graph_and_links_but_keeps_taxonomy() -> None:
-    source = build_valid_snapshot().model_copy(
+    base = build_valid_snapshot()
+    summary_embedding = base.embeddings[0].model_copy(
+        update={"id": "embedding-document", "summary_vector": ()}
+    )
+    source = base.model_copy(
         update={
+            "embeddings": (*base.embeddings, summary_embedding),
+            "has_summary_embeddings": (
+                graph.HasSummaryEmbedding.model_validate(
+                    {"from": "document", "to": "embedding-document"}
+                ),
+            ),
             "links_to": (
                 graph.LinksTo.model_validate({"from": "document", "to": "document"}),
-            )
+            ),
         }
     )
     command = _command("Document", "document")
@@ -488,6 +517,34 @@ def test_document_cascade_removes_owned_graph_and_links_but_keeps_taxonomy() -> 
     assert result.source_types and result.roles and result.processes and result.statuses
     assert any(item.relation_type == "LINKS_TO" for item in impact.affected_relations)
     assert validate_graph(result).is_valid
+
+
+def test_dump_loader_rejects_foreign_current_schema_profile(
+    tmp_path: Path,
+) -> None:
+    entries = write_snapshot(tmp_path, build_valid_snapshot())
+    foreign_profile = "f" * 64
+    run_id = compute_dump_run_id(
+        1,
+        NOW,
+        entries,
+        schema_profile_sha256=foreign_profile,
+    )
+    manifest = DumpManifest(
+        format=DUMP_FORMAT,
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+        schema_profile_sha256=foreign_profile,
+        dump_number=1,
+        published_at=NOW,
+        run_id=run_id,
+        files=entries,
+    )
+    (tmp_path / "manifest.json").write_bytes(
+        canonical_json_bytes(manifest.canonical_payload())
+    )
+
+    with pytest.raises(LadybugBuildError, match="verification failed"):
+        load_verified_dump(tmp_path)
 
 
 def test_database_name_rejects_control_whitespace_before_dump_access(

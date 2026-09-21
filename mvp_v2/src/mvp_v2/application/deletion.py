@@ -53,6 +53,11 @@ def apply_deletion(snapshot: GraphSnapshot, command: DeletionCommand) -> GraphSn
         for e in snapshot.has_embedding_assets
         if e.source_id in ids["Asset"]
     }
+    ids["Embedding"] |= {
+        e.target_id
+        for e in snapshot.has_summary_embeddings
+        if e.source_id in ids["Document"]
+    }
     if table == "Embedding":
         ids["Embedding"].add(target)
     if not any(

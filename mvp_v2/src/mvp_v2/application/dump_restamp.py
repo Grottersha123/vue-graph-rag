@@ -7,12 +7,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from mvp_v2.adapters.csv.scalars import decode_scalar
-from mvp_v2.adapters.csv.snapshot import write_snapshot
+from mvp_v2.adapters.csv.snapshot import parse_table_model, write_snapshot
 from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.manifests import (
     DUMP_FORMAT,
-    EXPECTED_TABLE_PATHS,
     DumpManifest,
     compute_dump_run_id,
 )
@@ -20,6 +18,7 @@ from mvp_v2.domain.invariants import validate_graph
 from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     RELATION_SPECS,
+    SCHEMA_PROFILE_SHA256,
     TABLE_SPECS,
 )
 from mvp_v2.domain.snapshot import GraphSnapshot
@@ -57,7 +56,11 @@ def _read_tables(
 ) -> dict[str, tuple[tuple[str, ...], list[Row]]]:
     tables: dict[str, tuple[tuple[str, ...], list[Row]]] = {}
     for spec in TABLE_SPECS:
-        raw = (dump / f"tables/{spec.table_name}.csv").read_text(encoding="utf-8")
+        table_path = dump / f"tables/{spec.table_name}.csv"
+        if not table_path.exists() and spec.table_name == "HAS_SUMMARY_EMBEDDING":
+            tables[spec.table_name] = (spec.headers, [])
+            continue
+        raw = table_path.read_text(encoding="utf-8")
         rows = list(csv.reader(io.StringIO(raw)))
         header = tuple(rows[0]) if rows else ()
         body: list[Row] = []
@@ -87,17 +90,10 @@ def plan_dump_restamp(dump: Path) -> RestampPlan:
             problems=("manifest.json is missing or unreadable",),
         )
     actual_files = {path.name for path in (dump / "tables").glob("*.csv")}
-    if actual_files != {Path(item).name for item in EXPECTED_TABLE_PATHS}:
-        problems.append("tables directory does not match the registry file set")
+    manifest_files = {Path(item.path).name for item in manifest.files}
+    if actual_files != manifest_files:
+        problems.append("tables directory does not match the manifest file set")
     tables = _read_tables(dump, problems)
-
-    for spec in TABLE_SPECS:
-        header, rows = tables[spec.table_name]
-        if header != spec.headers and rows:
-            problems.append(
-                f"{spec.table_name}.csv header is invalid and cannot be "
-                "auto-repaired while the table has data rows"
-            )
 
     version_by_id = {row["id"]: row for row in tables["DocumentVersion"][1]}
     doc_to_versions: dict[str, set[str]] = {}
@@ -153,6 +149,11 @@ def plan_dump_restamp(dump: Path) -> RestampPlan:
         for name in ("HAS_EMBEDDING_CHUNK", "HAS_EMBEDDING_ASSET")
         for edge in tables[name][1]
         if edge["from"] in removed["Chunk"] | removed["Asset"]
+    } & embedding_ids
+    removed["Embedding"] |= {
+        edge["to"]
+        for edge in tables["HAS_SUMMARY_EMBEDDING"][1]
+        if edge["from"] in removed["Document"]
     } & embedding_ids
 
     candidate_rows: dict[str, list[Row]] = {}
@@ -212,12 +213,18 @@ def plan_dump_restamp(dump: Path) -> RestampPlan:
     tables_to_write = {
         path: payload
         for path, payload in staged_bytes.items()
-        if (dump / path).read_bytes() != payload
+        if not (dump / path).is_file() or (dump / path).read_bytes() != payload
     }
+    previous_entries = {item.path: item for item in manifest.files}
     resign = any(
-        (entry.sha256, entry.row_count) != (old.sha256, old.row_count)
-        for entry, old in zip(staged_entries, manifest.files, strict=True)
-    )
+        entry.path not in previous_entries
+        or (entry.sha256, entry.row_count)
+        != (
+            previous_entries[entry.path].sha256,
+            previous_entries[entry.path].row_count,
+        )
+        for entry in staged_entries
+    ) or len(staged_entries) != len(manifest.files)
     if not tables_to_write and not resign:
         return RestampPlan(dump_path=str(dump), report_lines=())
     report.append(f"tables rewritten: {len(tables_to_write)}")
@@ -231,12 +238,13 @@ def plan_dump_restamp(dump: Path) -> RestampPlan:
         new_manifest = DumpManifest(
             format=DUMP_FORMAT,
             graph_schema_version=GRAPH_SCHEMA_VERSION,
+            schema_profile_sha256=SCHEMA_PROFILE_SHA256,
             dump_number=manifest.dump_number,
             published_at=manifest.published_at,
             run_id=run_id,
             files=staged_entries,
         )
-        manifest_bytes = canonical_json_bytes(new_manifest.model_dump(mode="json"))
+        manifest_bytes = canonical_json_bytes(new_manifest.canonical_payload())
         report.append(f"new run_id: {run_id}")
     return RestampPlan(
         dump_path=str(dump),
@@ -257,11 +265,9 @@ def _candidate_snapshot(
         models = []
         for number, row in enumerate(candidate_rows[spec.table_name], start=2):
             try:
-                decoded = {
-                    prop.name: decode_scalar(row[prop.name], prop.scalar_type)
-                    for prop in spec.properties
-                }
-                model = spec.model.model_validate(decoded)
+                header = tables[spec.table_name][0]
+                encoded = [row[column] for column in header]
+                model = parse_table_model(spec, header, encoded, number)
                 models.append(model.model_dump(mode="python"))
             except (KeyError, ValueError) as error:
                 problems.append(
