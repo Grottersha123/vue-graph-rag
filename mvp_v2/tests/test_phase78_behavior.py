@@ -27,13 +27,7 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
-from mvp_v2.application.graph_snapshot_operations.deletion import (
-    apply_deletion,
-    preview_deletion,
-)
-from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.manifests import (
+from mvp_v2.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DUMP_FORMAT,
     DatabaseManifest,
@@ -42,6 +36,12 @@ from mvp_v2.application.manifests import (
     compute_database_build_id,
     compute_dump_run_id,
 )
+from mvp_v2.application.graph_snapshot_operations.deletion import (
+    apply_deletion,
+    preview_deletion,
+)
+from mvp_v2.application.ingestion_contracts import ModelAuthorization
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.rag.retrieval.projection import active_projection
 from mvp_v2.application.rag.retrieval.retrieval import SearchError, SearchService
 from mvp_v2.domain import graph

@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from mvp_v2.application.manifests import DumpManifest
-from mvp_v2.application.services.validation import validate_snapshot
+from mvp_v2.application.dump_lifecycle.manifests import DumpManifest
+from mvp_v2.application.dump_lifecycle.validation import validate_snapshot
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.dumps import DumpRepository
 from mvp_v2.ports.media import MediaResolver, MediaVerificationError

@@ -10,11 +10,11 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     DeletionResult,
 )
+from mvp_v2.application.dump_lifecycle.manifests import DatabaseManifest, DumpManifest
 from mvp_v2.application.graph_snapshot_operations.deletion import (
     apply_deletion,
     preview_deletion,
 )
-from mvp_v2.application.manifests import DatabaseManifest, DumpManifest
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
 from mvp_v2.ports.media import MediaDeleter, MediaDeletionTarget

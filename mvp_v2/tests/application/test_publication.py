@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
-from mvp_v2.application.services.publication import (
+from mvp_v2.application.dump_lifecycle.publication import (
     SnapshotPublicationError,
     SnapshotPublicationService,
 )

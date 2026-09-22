@@ -18,6 +18,12 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
+from mvp_v2.application.dump_lifecycle.manifests import (
+    DATABASE_FORMAT,
+    DatabaseManifest,
+    TableCount,
+    compute_database_build_id,
+)
 from mvp_v2.application.graph_snapshot_operations.document_view import (
     build_document_view,
 )
@@ -25,12 +31,6 @@ from mvp_v2.application.graph_snapshot_operations.title_backfill import (
     fill_missing_document_titles,
 )
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.application.manifests import (
-    DATABASE_FORMAT,
-    DatabaseManifest,
-    TableCount,
-    compute_database_build_id,
-)
 from mvp_v2.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.rag.retrieval.retrieval import SearchService, _hydrate
 from mvp_v2.domain import graph

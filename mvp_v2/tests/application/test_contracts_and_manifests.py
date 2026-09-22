@@ -21,7 +21,7 @@ from mvp_v2.application.dto.retrieval import (
     SubjectRef,
     VectorQuery,
 )
-from mvp_v2.application.manifests import (
+from mvp_v2.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DUMP_FORMAT,
     DatabaseManifest,

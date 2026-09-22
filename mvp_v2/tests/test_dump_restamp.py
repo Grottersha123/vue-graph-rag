@@ -7,17 +7,17 @@ from pathlib import Path
 
 from mvp_v2.adapters.csv.snapshot import write_snapshot
 from mvp_v2.adapters.ladybug import load_verified_dump
-from mvp_v2.application.dump_restamp import (
+from mvp_v2.application.dump_lifecycle.dump_restamp import (
     RestampError,
     apply_dump_restamp,
     plan_dump_restamp,
 )
-from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.manifests import (
+from mvp_v2.application.dump_lifecycle.manifests import (
     DUMP_FORMAT,
     DumpManifest,
     compute_dump_run_id,
 )
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     RELATION_SPECS,

@@ -29,7 +29,11 @@ mvp_v2/src/mvp_v2/
       prompts.py              Chat/MCP templates and prompt assembly
       answer_rendering.py     strict citations and human-readable provenance
       errors.py               chat and generation contract errors
-    manifests.py             current-only dump and database manifests
+    dump_lifecycle/          dump, database, and publication lifecycle
+      manifests.py            current-only dump and database manifests
+      dump_restamp.py         deterministic dump manifest restamping
+      publication.py          graph, media, and version-file publication gate
+      validation.py           snapshot publication validation
     json_encoding.py         canonical JSON bytes for signed artifacts
     dto/                     embedding/search/deletion DTOs
     rag/preparation/         deterministic chunks and explicit model preparation
@@ -39,7 +43,7 @@ mvp_v2/src/mvp_v2/
     rag/retrieval/           active projection and evidence retrieval
       projection.py          deterministic current-active graph projection
       retrieval.py           authorized local embedding search and citations
-    services/                orchestration by use case
+    deletion_orchestration.py dump-first stale marking and replacement switching
   ports/                     narrow Protocols required by application services
   adapters/
     csv/                     deterministic typed CSV codec
@@ -101,7 +105,7 @@ release and there is no cloud fallback.
 - `application/rag/retrieval/retrieval.py`: authorized local embedding search and typed citation hydration.
 - `application/graph_snapshot_operations/deletion.py`: pure preview/apply cascade and version promotion policy.
 - `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
-- `application/services/publication.py`: graph, media, and version-file publication gate.
+- `application/dump_lifecycle/`: manifests, restamping, validation, and publication.
 - `presentation/controller.py`: upload limits/cleanup, exact snapshot/dump binding, and UI deletion adapters.
 - `bootstrap/provision_vector.py`: explicit, confirmed external extension provisioning only.
 

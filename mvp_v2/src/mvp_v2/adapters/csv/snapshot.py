@@ -17,7 +17,7 @@ from typing import TypeAlias
 from pydantic import BaseModel, ValidationError
 
 from mvp_v2.adapters.csv.scalars import CsvScalarError, decode_scalar, encode_scalar
-from mvp_v2.application.manifests import DumpFileEntry
+from mvp_v2.application.dump_lifecycle.manifests import DumpFileEntry
 from mvp_v2.domain import graph
 from mvp_v2.domain.schema_registry import (
     TABLE_SPECS,

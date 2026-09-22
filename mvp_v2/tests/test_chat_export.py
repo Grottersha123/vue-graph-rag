@@ -9,7 +9,7 @@ from mvp_v2.application.dto.retrieval import (
     SubjectKind,
     SubjectRef,
 )
-from mvp_v2.application.manifests import (
+from mvp_v2.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     GRAPH_SCHEMA_VERSION,
     DatabaseManifest,

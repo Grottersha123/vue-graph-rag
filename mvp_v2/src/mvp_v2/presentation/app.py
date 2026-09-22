@@ -31,7 +31,12 @@ from mvp_v2.application.dto.retrieval import (
     EmbeddingSpaceIdentity,
     SearchRequest,
 )
-from mvp_v2.application.dump_restamp import apply_dump_restamp, plan_dump_restamp
+from mvp_v2.application.dump_lifecycle.dump_restamp import (
+    apply_dump_restamp,
+    plan_dump_restamp,
+)
+from mvp_v2.application.dump_lifecycle.manifests import DatabaseManifest, DumpManifest
+from mvp_v2.application.dump_lifecycle.publication import SnapshotPublicationService
 from mvp_v2.application.graph_snapshot_operations.deletion import preview_deletion
 from mvp_v2.application.graph_snapshot_operations.document_editing import (
     DocumentMetadataUpdate,
@@ -59,7 +64,6 @@ from mvp_v2.application.ingestion_contracts import (
     ModelIdentity,
     SourceKind,
 )
-from mvp_v2.application.manifests import DatabaseManifest, DumpManifest
 from mvp_v2.application.rag.agent.answer_rendering import render_citation_details
 from mvp_v2.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.rag.agent.chat_export import (
@@ -78,7 +82,6 @@ from mvp_v2.application.rag.preparation.model_operations import (
     describe_asset,
 )
 from mvp_v2.application.rag.retrieval.retrieval import SearchService
-from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
 from mvp_v2.domain.graph import Asset, Document
 from mvp_v2.domain.schema_registry import NODE_SPECS

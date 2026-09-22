@@ -6,8 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from mvp_v2.adapters.csv.snapshot import CsvSnapshotError, write_snapshot
+from mvp_v2.application.dump_lifecycle.manifests import (
+    DUMP_FORMAT,
+    DumpManifest,
+    compute_dump_run_id,
+)
 from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.manifests import DUMP_FORMAT, DumpManifest, compute_dump_run_id
 from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     SCHEMA_PROFILE_SHA256,

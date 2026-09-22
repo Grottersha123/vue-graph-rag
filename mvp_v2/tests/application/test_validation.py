@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mvp_v2.application.services.validation import validate_snapshot
+from mvp_v2.application.dump_lifecycle.validation import validate_snapshot
 from mvp_v2.ports.media import MediaVerification, MediaVerificationError
 from tests.factories import build_valid_snapshot
 

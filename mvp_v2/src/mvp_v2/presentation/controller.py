@@ -31,6 +31,12 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     DeletionResult,
 )
+from mvp_v2.application.dump_lifecycle.manifests import (
+    DATABASE_FORMAT,
+    DatabaseManifest,
+    DumpManifest,
+)
+from mvp_v2.application.dump_lifecycle.publication import SnapshotPublicationService
 from mvp_v2.application.graph_snapshot_operations.deletion import apply_deletion
 from mvp_v2.application.graph_snapshot_operations.ingestion import IngestionService
 from mvp_v2.application.ingestion_contracts import (
@@ -39,8 +45,6 @@ from mvp_v2.application.ingestion_contracts import (
     SourceKind,
 )
 from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.manifests import DATABASE_FORMAT, DatabaseManifest, DumpManifest
-from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
 from mvp_v2.domain.schema_registry import SCHEMA_PROFILE_SHA256
 from mvp_v2.domain.snapshot import GraphSnapshot

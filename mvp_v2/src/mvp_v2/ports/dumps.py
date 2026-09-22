@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from mvp_v2.application.manifests import DumpManifest
+from mvp_v2.application.dump_lifecycle.manifests import DumpManifest
 from mvp_v2.domain.snapshot import GraphSnapshot
 
 

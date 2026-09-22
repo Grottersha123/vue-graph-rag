@@ -9,7 +9,7 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
-from mvp_v2.application.manifests import DatabaseManifest
+from mvp_v2.application.dump_lifecycle.manifests import DatabaseManifest
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import AnnPort
 from mvp_v2.ports.models import EmbeddingModel

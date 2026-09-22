@@ -20,14 +20,14 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
-from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.manifests import (
+from mvp_v2.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DatabaseManifest,
     DumpManifest,
     TableCount,
     compute_database_build_id,
 )
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.rag.retrieval.projection import active_projection
 from mvp_v2.domain.invariants import validate_graph
 from mvp_v2.domain.schema_registry import (
