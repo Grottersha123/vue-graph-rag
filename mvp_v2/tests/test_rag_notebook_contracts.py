@@ -13,6 +13,62 @@ def _cells() -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], payload["cells"])
 
 
+def _literal_dict_keys(node: ast.AST) -> set[str]:
+    if not isinstance(node, ast.Dict):
+        return set()
+    return {
+        key.value
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+
+
+def test_batch_artifacts_keep_run_metadata_out_of_case_results() -> None:
+    result_keys: list[set[str]] = []
+    run_keys: list[set[str]] = []
+    traced_prompt_keys: set[str] = set()
+    stale_prompt_locations: list[str] = []
+
+    for cell in _cells():
+        if cell["cell_type"] != "code":
+            continue
+        source = "".join(cast(list[str], cell["source"]))
+        stale_prompt_locations.append(source)
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
+                continue
+            target_names = {
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            }
+            if "result" in target_names:
+                result_keys.append(_literal_dict_keys(node.value))
+            if "RUN_METADATA" in target_names:
+                run_keys.append(_literal_dict_keys(node.value))
+        if "class TracedModel:" in source:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Dict):
+                    traced_prompt_keys.update(_literal_dict_keys(node))
+
+    assert len(result_keys) == 2
+    assert result_keys[0] == result_keys[1]
+    assert not (
+        result_keys[0]
+        & {"database", "chat_model", "prompt_profile", "minimum_similarity_score"}
+    )
+    assert len(run_keys) == 2
+    assert all(
+        {"database", "chat_model", "minimum_similarity_score", "prompt"}
+        <= keys
+        for keys in run_keys
+    )
+    assert "prompt" not in traced_prompt_keys
+    assert all(
+        "results.json[*].generation_calls[*].prompt" not in source
+        for source in stale_prompt_locations
+    )
+
+
 def test_rag_notebook_code_cells_compile_with_top_level_await() -> None:
     for index, cell in enumerate(_cells()):
         if cell["cell_type"] != "code":
