@@ -16,21 +16,13 @@ mvp_v2/src/mvp_v2/
     invariants.py            cross-row graph validation
     chunking.py              deterministic text chunk policy
   application/               use cases and non-persisted commands/results
-    manifests.py             dump and database manifests
-    dto/                     embedding/search/deletion/import DTOs
+    manifests.py             current-only dump and database manifests
+    json_encoding.py         canonical JSON bytes for signed artifacts
+    dto/                     embedding/search/deletion DTOs
     services/                orchestration by use case
-      migration.py           preview, approval, validation, and dump gates
   ports/                     narrow Protocols required by application services
   adapters/
     csv/                     deterministic typed CSV codec
-    legacy/
-      reader.py              allowlisted exact-header CSV reader
-      common.py              bounded scalar/path/issue helpers
-      parsers.py             adapter-local legacy-to-target record mapping
-      diagnostics.py         cross-check and image-manifest diagnostics
-      source_tree.py         documents/images/uploads scan and diagnostics
-      reporting.py           canonical report facts, ordering, and identity
-      importer.py            read-only preview composition
     filesystem/
       media.py               confined resolver for graph-referenced files
       dumps.py               single-process immutable numbered dump writer
@@ -50,7 +42,7 @@ Tests mirror these responsibilities under `mvp_v2/tests/`.
 |---|---|---|
 | 1. Pydantic contract | `domain/base.py`, `domain/graph.py`, `domain/snapshot.py`, `domain/schema_registry.py`, `application/manifests.py`, `application/dto/` | Python implementer |
 | 2. CSV and validation | `adapters/csv/`, `domain/invariants.py`, dump application service | Python implementer |
-| 3. Legacy import | `adapters/legacy/`, import application service | Python implementer |
+| 3. Current dump publication | `adapters/csv/`, `adapters/filesystem/dumps.py`, publication service | Python implementer |
 | 4. Text ingestion | `domain/chunking.py`, ingestion service, document adapters | Python implementer |
 | 5. Images and vision | filesystem adapter, vision port, `adapters/ollama/vision.py`, asset service | AI implementer |
 | 6. Embeddings | embedding port, planning/service, `adapters/ollama/embedding.py` | AI implementer |
@@ -74,6 +66,7 @@ release and there is no cloud fallback.
 
 ## Consolidated ingestion/model delivery
 
+- `application/reference_data.py`: explicit minimal current-schema SourceType/Status bootstrap.
 - `application/ingestion_contracts.py`: preview/commit and explicit model authorization DTOs.
 - `application/chunking.py`, `application/ingestion.py`: deterministic chunks and immutable version transitions.
 - `application/model_operations.py`: local vision updates and missing/all embedding policy.

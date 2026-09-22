@@ -16,8 +16,6 @@ from mvp_v2.domain.base import (
 )
 from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
-    LEGACY_GRAPH_SCHEMA_VERSION,
-    LEGACY_TABLE_NAMES,
     SCHEMA_PROFILE_SHA256,
     TABLE_NAMES,
 )
@@ -25,8 +23,7 @@ from mvp_v2.domain.schema_registry import (
 DUMP_FORMAT: Final[Literal["mvp-v2-dump-v1"]] = "mvp-v2-dump-v1"
 DATABASE_FORMAT: Final[Literal["mvp-v2-db-v1"]] = "mvp-v2-db-v1"
 EXPECTED_TABLE_PATHS: Final = tuple(f"tables/{name}.csv" for name in TABLE_NAMES)
-LEGACY_TABLE_PATHS: Final = tuple(f"tables/{name}.csv" for name in LEGACY_TABLE_NAMES)
-GraphSchemaVersion: TypeAlias = Literal["mvp-v2-graph-v1", "mvp-v2-graph-v2"]
+GraphSchemaVersion: TypeAlias = Literal["mvp-v2-graph-v2"]
 PositiveInt = Annotated[int, Field(strict=True, ge=1, le=9_223_372_036_854_775_807)]
 NonNegativeInt = Annotated[int, Field(strict=True, ge=0, le=9_223_372_036_854_775_807)]
 
@@ -73,43 +70,29 @@ def compute_dump_run_id(
         "graph_schema_version": graph_schema_version,
         "published_at": _utc_text(published_at),
     }
-    if graph_schema_version == GRAPH_SCHEMA_VERSION:
-        payload["schema_profile_sha256"] = schema_profile_sha256
+    payload["schema_profile_sha256"] = schema_profile_sha256
     return _canonical_hash(payload)
 
 
 class DumpManifest(ContractModel):
     format: Literal["mvp-v2-dump-v1"]
     graph_schema_version: GraphSchemaVersion
-    schema_profile_sha256: Sha256 | Literal[""] = SCHEMA_PROFILE_SHA256
+    schema_profile_sha256: Sha256 = SCHEMA_PROFILE_SHA256
     dump_number: PositiveInt
     published_at: UtcDateTime
     run_id: Sha256
-    files: Annotated[tuple[DumpFileEntry, ...], Field(min_length=21, max_length=22)]
+    files: Annotated[tuple[DumpFileEntry, ...], Field(min_length=22, max_length=22)]
 
     def canonical_payload(self) -> dict[str, object]:
-        payload = self.model_dump(mode="json")
-        if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION:
-            payload.pop("schema_profile_sha256", None)
-        return payload
+        return self.model_dump(mode="json")
 
     @model_validator(mode="after")
     def validate_manifest(self) -> DumpManifest:
         paths = tuple(entry.path for entry in self.files)
         if len(paths) != len(set(paths)):
             raise ValueError("dump file paths must be unique")
-        expected_paths = (
-            LEGACY_TABLE_PATHS
-            if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION
-            else EXPECTED_TABLE_PATHS
-        )
-        if frozenset(paths) != frozenset(expected_paths):
-            raise ValueError("dump files do not match graph schema version")
-        if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION:
-            if self.schema_profile_sha256 not in {"", SCHEMA_PROFILE_SHA256}:
-                raise ValueError("legacy dump must not define a schema profile")
-        elif not self.schema_profile_sha256:
-            raise ValueError("current dump requires a schema profile")
+        if frozenset(paths) != frozenset(EXPECTED_TABLE_PATHS):
+            raise ValueError("dump files do not match the current graph schema")
         expected = compute_dump_run_id(
             self.dump_number,
             self.published_at,
@@ -156,15 +139,14 @@ def compute_database_build_id(
         "vision_model_version": vision_model_version,
         "vision_provider": vision_provider,
     }
-    if graph_schema_version == GRAPH_SCHEMA_VERSION:
-        payload["schema_profile_sha256"] = schema_profile_sha256
+    payload["schema_profile_sha256"] = schema_profile_sha256
     return _canonical_hash(payload)
 
 
 class DatabaseManifest(ContractModel):
     format: Literal["mvp-v2-db-v1"]
     graph_schema_version: GraphSchemaVersion
-    schema_profile_sha256: Sha256 | Literal[""] = SCHEMA_PROFILE_SHA256
+    schema_profile_sha256: Sha256 = SCHEMA_PROFILE_SHA256
     build_id: Sha256
     database_name: NonBlankText
     built_at: UtcDateTime
@@ -175,31 +157,18 @@ class DatabaseManifest(ContractModel):
     vision_provider: NonBlankText
     vision_model: NonBlankText
     vision_model_version: NonBlankText
-    row_counts: Annotated[tuple[TableCount, ...], Field(min_length=21, max_length=22)]
+    row_counts: Annotated[tuple[TableCount, ...], Field(min_length=22, max_length=22)]
 
     def canonical_payload(self) -> dict[str, object]:
-        payload = self.model_dump(mode="json")
-        if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION:
-            payload.pop("schema_profile_sha256", None)
-        return payload
+        return self.model_dump(mode="json")
 
     @model_validator(mode="after")
     def validate_manifest(self) -> DatabaseManifest:
         tables = tuple(entry.table for entry in self.row_counts)
-        expected_tables = (
-            LEGACY_TABLE_NAMES
-            if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION
-            else TABLE_NAMES
-        )
         if len(tables) != len(set(tables)) or frozenset(tables) != frozenset(
-            expected_tables
+            TABLE_NAMES
         ):
-            raise ValueError("row counts do not match graph schema version")
-        if self.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION:
-            if self.schema_profile_sha256 not in {"", SCHEMA_PROFILE_SHA256}:
-                raise ValueError("legacy database must not define a schema profile")
-        elif not self.schema_profile_sha256:
-            raise ValueError("current database requires a schema profile")
+            raise ValueError("row counts do not match the current graph schema")
         expected = compute_database_build_id(
             database_name=self.database_name,
             built_at=self.built_at,

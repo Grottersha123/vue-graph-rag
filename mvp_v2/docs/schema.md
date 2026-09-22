@@ -56,12 +56,9 @@ Manifest contracts are versioned independently from graph properties. The graph
 current schema version is `mvp-v2-graph-v2`, dump manifests use
 `mvp-v2-dump-v1`, and database manifests use `mvp-v2-db-v1`. A current dump
 manifest lists exactly the 22 graph CSV tables and includes the active schema-profile
-SHA-256. Verified v1 dumps are migrated in memory and are never rewritten. Its `run_id` hashes the immutable dump identity and file facts. A
-database manifest records the source dump `run_id`; its `build_id` hashes all
-immutable database identity and row-count facts in canonical table-name order.
+SHA-256. Only `mvp-v2-graph-v2` is accepted; graph-v1 and 21-table artifacts are unsupported. Its `run_id` hashes the immutable dump identity and file facts. A database manifest records the source dump `run_id`; its `build_id` hashes all immutable database identity and row-count facts in canonical table-name order.
 
-The first import of the read-only `mvp/mvp_data` snapshot becomes `dump-000001`.
-A failed validation does not consume or publish a dump number.
+The first publication from a valid current session snapshot becomes `dump-000001`. A failed validation does not consume or publish a dump number.
 
 ## Graph
 

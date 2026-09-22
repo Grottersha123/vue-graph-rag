@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from mvp_v2.adapters.csv.snapshot import read_snapshot
-from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -21,6 +20,7 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.manifests import (
     DATABASE_FORMAT,
     DatabaseManifest,
@@ -96,10 +96,7 @@ def load_verified_dump(path: Path) -> tuple[DumpManifest, GraphSnapshot]:
             actual.add(relative)
         manifest_bytes = (path / "manifest.json").read_bytes()
         manifest = DumpManifest.model_validate_json(manifest_bytes)
-        if (
-            manifest.graph_schema_version == GRAPH_SCHEMA_VERSION
-            and manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
-        ):
+        if manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256:
             raise ValueError("dump schema profile does not match current config")
         expected = {"manifest.json", *(item.path for item in manifest.files)}
         if actual != expected:

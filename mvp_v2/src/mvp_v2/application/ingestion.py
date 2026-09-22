@@ -197,7 +197,7 @@ class IngestionService:
                     external_id=item.external_id,
                     sha256=hashlib.sha256(item.content).hexdigest(),
                     position=position,
-                    description=item.caption,
+                    description=item.description,
                     ocr_text=item.ocr_text,
                 )
             )
@@ -237,7 +237,7 @@ class IngestionService:
 
     @staticmethod
     def _with_resolved_identity(request: IngestionRequest) -> IngestionRequest:
-        if request.external_id or request.source_url:
+        if request.document_id or request.external_id or request.source_url:
             return request
         if request.kind == "image_collection":
             raise IngestionError(
@@ -251,6 +251,16 @@ class IngestionService:
     def _find_document(
         snapshot: GraphSnapshot, request: IngestionRequest
     ) -> str | None:
+        if request.document_id is not None:
+            document = next(
+                (item for item in snapshot.documents if item.id == request.document_id),
+                None,
+            )
+            if document is None:
+                raise IngestionError("document_id does not resolve exactly")
+            if request.external_id != document.external_id:
+                raise IngestionError("external_id does not match the selected document")
+            return document.id
         matches = [
             item.id
             for item in snapshot.documents
@@ -313,7 +323,11 @@ class IngestionService:
         document_fields = {
             "id": preview.document_id,
             "title": request.title,
-            "source_name": request.source_name,
+            "source_name": (
+                request.source_name
+                if existing_document is None
+                else existing_document.source_name
+            ),
             "content_format": request.kind,
             "source_url": request.source_url,
             "external_id": request.external_id,

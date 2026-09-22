@@ -129,6 +129,43 @@ def test_chunking_and_version_history_with_filesystem(tmp_path: Path) -> None:
     assert (tmp_path / versions[1].local_path).read_text() == text
 
 
+def test_explicit_document_target_creates_new_version_safely() -> None:
+    service = IngestionService(
+        Extractor(ExtractedInput(content=b"content", text="content", extension=".md")),
+        Store(),
+    )
+    initial_request = request().model_copy(update={"source_name": "Original source"})
+    first_preview = service.preview(base_snapshot(), initial_request)
+    first = service.commit(base_snapshot(), first_preview, created_at=NOW).snapshot
+    document = first.documents[0]
+    targeted = request().model_copy(
+        update={
+            "document_id": document.id,
+            "external_id": document.external_id,
+            "input_path": "replacement.md",
+        }
+    )
+
+    preview = service.preview(first, targeted)
+
+    assert preview.document_id == document.id
+    assert preview.version == 2
+    second = service.commit(first, preview, created_at=NOW).snapshot
+    assert len(second.documents) == 1
+    assert second.documents[0].source_name == "Original source"
+    assert {item.version for item in second.document_versions} == {1, 2}
+    with pytest.raises(IngestionError, match="external_id does not match"):
+        service.preview(
+            first,
+            targeted.model_copy(update={"external_id": "another-document"}),
+        )
+    with pytest.raises(IngestionError, match="document_id does not resolve"):
+        service.preview(
+            first,
+            targeted.model_copy(update={"document_id": "missing-document"}),
+        )
+
+
 def test_local_path_generates_identity_and_reuses_document(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -149,7 +149,7 @@ OptionalRelativePath: TypeAlias = Annotated[
 
 
 def stable_id(prefix: str, *parts: str) -> str:
-    """Create an ID with behavior identical to the legacy implementation."""
+    """Create a deterministic ID with stable, golden-tested behavior."""
     if not prefix or any(not isinstance(part, str) for part in parts):
         raise ValueError("stable IDs require a kind and string parts")
     payload = "\x1f".join((prefix, *parts)).encode("utf-8")

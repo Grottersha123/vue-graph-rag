@@ -175,11 +175,16 @@ def test_manifest_schema_and_identity_changes_invalidate_hashes() -> None:
         "run_id": compute_dump_run_id(1, NOW, files),
         "files": files,
     }
-    with pytest.raises(ValidationError):
-        DumpManifest.model_validate(
-            {**manifest_values, "graph_schema_version": "other"}
-        )
+    for retired_version in ("mvp-v2-graph-v1", "other"):
+        with pytest.raises(ValidationError):
+            DumpManifest.model_validate(
+                {**manifest_values, "graph_schema_version": retired_version}
+            )
     database = make_database_manifest()
+    with pytest.raises(ValidationError):
+        DatabaseManifest.model_validate(
+            {**database.model_dump(), "graph_schema_version": "mvp-v2-graph-v1"}
+        )
     with pytest.raises(ValidationError):
         DatabaseManifest.model_validate(
             {**database.model_dump(), "source_dump_run_id": "c" * 64}
@@ -192,6 +197,8 @@ def test_database_manifest_requires_exact_counts_and_canonical_build_id() -> Non
     reordered = make_database_manifest(row_counts=reversed_counts)
     assert reordered.build_id == database.build_id
     bad_counts = (*database.row_counts[:-1], TableCount(table="UNKNOWN", count=1))
+    with pytest.raises(ValidationError):
+        make_database_manifest(row_counts=database.row_counts[:-1])
     with pytest.raises(ValidationError):
         make_database_manifest(row_counts=bad_counts)
     with pytest.raises(ValidationError):

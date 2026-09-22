@@ -9,36 +9,20 @@ Local single-user multimodal Graph RAG with a strict, versioned graph contract.
 ## Local runtime workflow
 
 ```text
-mvp/mvp_data/ -> mvp_v2/runtime/mvp_data/
-mvp_v2/runtime/mvp_data/ -> mvp_v2/runtime/dumps/dump-NNNNNN/
-mvp_v2/runtime/dumps/ -> mvp_v2/runtime/databases/ (later phase)
+mvp_v2/runtime/mvp_data/ -> working source/media files
+session snapshot -> mvp_v2/runtime/dumps/dump-NNNNNN/
+mvp_v2/runtime/dumps/ -> mvp_v2/runtime/databases/
 ```
 
-Populate the ignored working directory once with ordinary filesystem tooling, for
-example `cp -R mvp/mvp_data mvp_v2/runtime/mvp_data`. Review what you copy. Do not
-select or use old `.lbdb` files; MVP v2 will create its databases later.
+The folder name `runtime/mvp_data` is retained as the configured working root, but no legacy importer remains. Do not copy or load old `mvp/mvp_data` CSV trees. The application accepts only current `mvp-v2-graph-v2` artifacts with exactly 22 canonical CSV tables and the current schema-profile SHA-256. Graph-v1/21-table dumps, legacy Asset headers (`caption`, `llm_description`), and persisted Embedding `purpose` columns are rejected.
 
-`CsvLegacyImporter.preview(runtime_data_root)` reads the existing working copy. It
-allowlists the 15 source CSV names and scans only `documents/`, `images/`, and
-`uploads/`. Other root entries are ignored. Preview returns a canonical
-`GraphSnapshot` and deterministic report. The report binds the exact snapshot,
-source CSV hashes, source file totals, source-tree digest, and diagnostics.
+`FilesystemDumpRepository` writes 22 canonical CSV tables and `manifest.json` to a temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the next number after the highest valid six-digit dump directory and cleans its failed staging directory. It assumes one local Streamlit process; it has no inter-process lock. No preview copies data or publishes a dump.
 
-After explicit report review, `LegacyMigrationService.publish` accepts the exact
-report ID, `FilesystemMediaResolver(runtime_data_root)`, dumps root, and UTC time.
-A blocking report, approval mismatch, invalid graph, or missing/changed graph-referenced
-DocumentVersion or Asset file blocks publication. Uploads and other orphan source
-files are not rechecked at publication.
-
-`FilesystemDumpRepository` writes 22 canonical CSV tables and `manifest.json` to a
-temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the next
-number after the highest valid six-digit dump directory and cleans its failed staging
-directory. It assumes one local Streamlit process; it has no inter-process lock.
-No preview copies data or publishes a dump.
+A session can start from a verified current dump or an empty snapshot. For an empty snapshot, Upload shows **Initialize workspace**. This explicit action adds only minimal current-schema `SourceType` and `Status` rows to the session snapshot; it does not read files, publish a dump or create a database.
 
 ## Offline ingestion and embeddings
 
-`IngestionService` previews URL/PDF/Markdown/HTML/image-collection inputs without mutation, then commits a new immutable `GraphSnapshot` and confined runtime files. Exact `external_id` (or URL when no external ID is supplied) drives document identity. Versions and embedding history are retained.
+`IngestionService` previews URL/PDF/Markdown/HTML/image-collection inputs without mutation, then commits a new immutable `GraphSnapshot` and confined runtime files. Exact `external_id` (or URL when no external ID is supplied) drives document identity. Versions and embedding history are retained. Upload is the primary ingestion surface. For a selected Document, **Upload new version** opens the same upload form in a dialog and binds the request to that exact Document ID and external ID. Markdown sibling images must be included in the same upload batch; the new DocumentVersion receives its own Asset nodes and version-confined media paths, while prior version media remains intact.
 
 Local model operations require `ModelAuthorization(allow=True, operation=...)`. Configure exact Ollama model and version values at the application boundary (`TODO-MODEL`); there is no default model or cloud fallback. Asset retrieval embeds the deterministic text `Image description:\n{description}` and requires a nonblank description. Live Ollama/model quality and installed PDF CLI validation remain operator tasks.
 
@@ -78,8 +62,7 @@ UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
 values into the process, and the UI uses them as sidebar/model defaults. The sidebar
 still accepts only paths confined below `mvp_v2/runtime`. Missing folders, dumps,
 databases, Ollama, and models are reported without startup calls or automatic
-creation. The UI does not migrate `mvp/mvp_data` and does not open a native database
-until the operator explicitly selects it. Use the same `MVP_V2_LADYBUG_HOME` for
+creation. The UI has no legacy migration path and does not open a native database until the operator explicitly selects it. Use the same `MVP_V2_LADYBUG_HOME` for
 external vector provisioning. Every vision, embedding, or generation call still
 requires fresh explicit authorization.
 
@@ -93,6 +76,8 @@ or out-of-runtime sidebar paths block every operation; action code never falls b
 default paths. Database artifacts are scanned through their canonical internal manifest
 without opening `database.lbug`, and only an explicit search/chat/build action lazily
 imports Ladybug. Database and model operations never run during render.
+
+Configured node properties from `graph_fields.json` are displayed as ordinary read-only columns only on their declared Document, Chunk, Asset, or Embedding table. The internal `custom_properties` sidecar is never displayed directly.
 
 Deletion confirmation requires an exact preview, a clean snapshot bound to the selected
 canonical dump, and its nonstale active database. It publishes the validated deleted

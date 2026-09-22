@@ -200,7 +200,7 @@ def test_snapshot_contains_typed_immutable_tuples() -> None:
         snapshot.documents = ()
 
 
-def legacy_stable_id(prefix: str, *parts: str) -> str:
+def reference_stable_id(prefix: str, *parts: str) -> str:
     if not prefix or any(not isinstance(part, str) for part in parts):
         raise ValueError("stable IDs require a kind and string parts")
     payload = "\x1f".join((prefix, *parts)).encode("utf-8")
@@ -208,7 +208,7 @@ def legacy_stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}-{digest}"
 
 
-def test_stable_id_has_exact_legacy_parity_and_golden_value() -> None:
+def test_stable_id_has_exact_reference_parity_and_golden_value() -> None:
     assert stable_id("chunk", "doc", "0") == "chunk-22ce4e0497f1f8a9f139a23f"
     cases = (
         ("chunk", ()),
@@ -219,10 +219,10 @@ def test_stable_id_has_exact_legacy_parity_and_golden_value() -> None:
         ("chunk", ("bad\u0085part", " tail ")),
     )
     for prefix, parts in cases:
-        assert stable_id(prefix, *parts) == legacy_stable_id(prefix, *parts)
+        assert stable_id(prefix, *parts) == reference_stable_id(prefix, *parts)
 
 
-def test_stable_id_preserves_legacy_exception_behavior() -> None:
+def test_stable_id_preserves_reference_exception_behavior() -> None:
     for prefix in ("", None, 0):
         with pytest.raises(
             ValueError, match="stable IDs require a kind and string parts"

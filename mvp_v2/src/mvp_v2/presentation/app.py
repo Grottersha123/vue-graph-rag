@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import os
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -16,7 +18,6 @@ from pydantic import ValidationError
 from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_dump
-from mvp_v2.adapters.legacy.importer import CsvLegacyImporter
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
@@ -37,7 +38,6 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     GraphNodeRef,
 )
-from mvp_v2.application.dto.importing import LegacyImportResult
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -53,13 +53,14 @@ from mvp_v2.application.ingestion_contracts import (
 )
 from mvp_v2.application.manifests import DatabaseManifest, DumpManifest
 from mvp_v2.application.model_operations import build_embeddings, describe_asset
+from mvp_v2.application.reference_data import initialize_reference_data
 from mvp_v2.application.relations import RelationKind, RelationService
 from mvp_v2.application.retrieval import SearchService
-from mvp_v2.application.services.migration import LegacyMigrationService
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.application.title_backfill import fill_missing_document_titles
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
-from mvp_v2.domain.graph import Asset
+from mvp_v2.domain.graph import Asset, Document
+from mvp_v2.domain.schema_registry import NODE_SPECS
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.presentation.controller import (
     active_database,
@@ -93,7 +94,7 @@ TAB_LABELS = (
     "LadybugDB",
     "Search",
     "Chatbot",
-    "Errors/Import report",
+    "Errors",
 )
 _SAFE_DB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 _ResultT = TypeVar("_ResultT")
@@ -116,11 +117,33 @@ def _asset_label(asset: Asset) -> str:
     return asset.description.strip() or asset.local_path
 
 
+def _custom_property_names(table_name: str) -> tuple[str, ...]:
+    spec = next(item for item in NODE_SPECS if item.table_name == table_name)
+    return tuple(item.name for item in spec.properties if item.custom)
+
+
+def _node_record(table_name: str, node: Any) -> dict[str, Any]:
+    record = cast(dict[str, Any], node.model_dump(exclude={"custom_properties"}))
+    values = {item.name: item.value for item in node.custom_properties}
+    spec = next(item for item in NODE_SPECS if item.table_name == table_name)
+    for field in spec.properties:
+        if field.custom:
+            record[field.name] = values.get(field.name, field.default)
+    return record
+
+
 def _action_button(
-    label: str, *, disabled: bool = False, primary: bool = False
+    label: str,
+    *,
+    disabled: bool = False,
+    primary: bool = False,
+    key: str | None = None,
 ) -> bool:
     clicked = st.button(
-        label, disabled=disabled, type="primary" if primary else "secondary"
+        label,
+        disabled=disabled,
+        type="primary" if primary else "secondary",
+        key=key,
     )
     if clicked:
         record_user_action(label)
@@ -179,7 +202,7 @@ def _sidebar() -> UiRuntimeConfig | None:
 
 def _initialize_state() -> None:
     st.session_state.setdefault("snapshot", GraphSnapshot())
-    st.session_state.setdefault("preview", None)
+    st.session_state.setdefault("snapshot_revision", 0)
     st.session_state.setdefault("errors", [])
     st.session_state.setdefault("chat_history", [])
     st.session_state.setdefault("active_db", None)
@@ -300,56 +323,252 @@ def _preferred_option_index(options: dict[str, str], preferred: str) -> int:
     return 0
 
 
+def _clear_upload_state(state: MutableMapping[str, Any], key_prefix: str) -> None:
+    prefix = f"{key_prefix}_"
+    for key in tuple(state):
+        if key.startswith(prefix):
+            del state[key]
+
+
+def _upload_input_fingerprint(
+    *,
+    kind: str,
+    title: str,
+    source_type_id: str | None,
+    external_id: str,
+    status_id: str | None,
+    source_url: str,
+    process_id: str,
+    role_id: str,
+    document_id: str | None,
+    snapshot_revision: int,
+    uploads: tuple[Any, ...],
+) -> str:
+    payload = {
+        "kind": kind,
+        "title": title,
+        "source_type_id": source_type_id,
+        "external_id": external_id,
+        "status_id": status_id,
+        "source_url": source_url,
+        "process_id": process_id,
+        "role_id": role_id,
+        "document_id": document_id,
+        "snapshot_revision": snapshot_revision,
+        "uploads": [
+            {
+                "name": str(item.name),
+                "sha256": hashlib.sha256(item.getvalue()).hexdigest(),
+            }
+            for item in uploads
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _invalidate_upload_preview(
+    state: MutableMapping[str, Any],
+    *,
+    preview_key: str,
+    fingerprint_key: str,
+) -> None:
+    state[preview_key] = None
+    state[fingerprint_key] = None
+
+
+def _current_upload_preview(
+    state: MutableMapping[str, Any],
+    *,
+    preview_key: str,
+    fingerprint_key: str,
+    fingerprint: str,
+) -> Any | None:
+    if state.get(fingerprint_key) != fingerprint:
+        return None
+    return state.get(preview_key)
+
+
 def _upload(config: UiRuntimeConfig | None) -> None:
     st.subheader("Upload")
+    snapshot = st.session_state.snapshot
+    missing_reference_data = tuple(
+        label
+        for label, values in (
+            ("SourceType", snapshot.source_types),
+            ("Status", snapshot.statuses),
+        )
+        if not values
+    )
+    if missing_reference_data:
+        st.warning(
+            "Workspace needs current reference data: "
+            + ", ".join(missing_reference_data)
+            + "."
+        )
+        if _action_button(
+            "Initialize workspace",
+            disabled=_blocked(config),
+            key="initialize_current_workspace",
+        ):
+            try:
+                updated = _run_visible_operation(
+                    "initialize_workspace",
+                    "Инициализация current workspace…",
+                    lambda: initialize_reference_data(snapshot),
+                )
+                mark_snapshot_dirty(st.session_state, updated)
+                st.success(
+                    "Current SourceType and Status initialized in the session snapshot."
+                )
+            except (ValueError, ValidationError):
+                _record_error(
+                    "Workspace initialization failed; the snapshot was not changed."
+                )
+    _render_upload(config, key_prefix="upload")
+
+
+def _linked_target(relations: tuple[Any, ...], source_id: str) -> str | None:
+    return next(
+        (item.target_id for item in relations if item.source_id == source_id),
+        None,
+    )
+
+
+def _select_index(options: tuple[str, ...], preferred: str | None) -> int:
+    return options.index(preferred) if preferred in options else 0
+
+
+def _render_upload(
+    config: UiRuntimeConfig | None,
+    *,
+    key_prefix: str,
+    document: Document | None = None,
+) -> None:
     blocked = _blocked(config)
     missing = False if config is None else _missing(config)
     snapshot = st.session_state.snapshot
+    kind_options = ("url", "pdf", "markdown", "html", "image_collection")
+    preferred_kind = None if document is None else document.content_format
     kind = st.selectbox(
-        "Source kind", ("url", "pdf", "markdown", "html", "image_collection")
+        "Source kind",
+        kind_options,
+        index=_select_index(kind_options, preferred_kind),
+        key=f"{key_prefix}_kind",
     )
     source_types = {item.id: item.code for item in snapshot.source_types}
     statuses = {item.id: item.name for item in snapshot.statuses}
     processes = {item.id: item.name for item in snapshot.processes}
     roles = {item.id: item.name for item in snapshot.roles}
+    version_id = None
+    if document is not None:
+        version_ids = {
+            item.target_id
+            for item in snapshot.has_versions
+            if item.source_id == document.id
+        }
+        version_id = next(
+            (
+                item.id
+                for item in snapshot.document_versions
+                if item.id in version_ids and item.is_current
+            ),
+            None,
+        )
+    preferred_source_type = (
+        None
+        if document is None
+        else _linked_target(snapshot.has_source_types, document.id)
+    )
+    source_type_options = tuple(source_types)
     source_type_id = (
         st.selectbox(
             "SourceType",
-            tuple(source_types),
+            source_type_options,
+            index=_select_index(source_type_options, preferred_source_type),
             format_func=lambda value: source_types[value],
+            key=f"{key_prefix}_source_type",
         )
         if source_types
         else None
     )
+    preferred_status = (
+        None
+        if version_id is None
+        else _linked_target(snapshot.has_statuses, version_id)
+    )
+    status_options = tuple(statuses)
     status_id = (
         st.selectbox(
             "Required Status",
-            tuple(statuses),
+            status_options,
+            index=_select_index(status_options, preferred_status),
             format_func=lambda value: statuses[value],
+            key=f"{key_prefix}_status",
         )
         if statuses
         else None
     )
+    process_options = ("", *processes)
+    preferred_process = (
+        None if document is None else _linked_target(snapshot.describes, document.id)
+    )
     process_id = st.selectbox(
         "Process (optional)",
-        ("", *processes),
-        index=_preferred_option_index(processes, "onboarding"),
+        process_options,
+        index=(
+            _select_index(process_options, preferred_process)
+            if document is not None
+            else _preferred_option_index(processes, "onboarding")
+        ),
         format_func=lambda value: processes.get(value, "Not selected"),
+        key=f"{key_prefix}_process",
+    )
+    role_options = ("", *roles)
+    preferred_role = (
+        None if document is None else _linked_target(snapshot.for_roles, document.id)
     )
     role_id = st.selectbox(
         "Role (optional)",
-        ("", *roles),
-        index=_preferred_option_index(roles, "student"),
+        role_options,
+        index=(
+            _select_index(role_options, preferred_role)
+            if document is not None
+            else _preferred_option_index(roles, "student")
+        ),
         format_func=lambda value: roles.get(value, "Not selected"),
+        key=f"{key_prefix}_role",
     )
     title = st.text_input(
         "Title",
+        value="" if document is None else document.title,
         help=(
             "Optional for Markdown: the first H1 is used, then the file name. "
             "A typed title overrides both."
         ),
+        key=f"{key_prefix}_title",
     )
-    external_id = st.text_input("Existing/new identity (external_id)")
+    external_id_key = f"{key_prefix}_external_id"
+    if document is not None:
+        st.session_state[external_id_key] = document.external_id
+        external_id = st.text_input(
+            "Existing/new identity (external_id)",
+            disabled=True,
+            key=external_id_key,
+        )
+    else:
+        external_id = st.text_input(
+            "Existing/new identity (external_id)",
+            value="",
+            key=external_id_key,
+        )
+    if document is not None:
+        st.caption(f"New version of Document `{document.id}`.")
     st.caption(
         "Optional for PDF, Markdown, and HTML: without a Source URL, identity is "
         "generated as local:<primary file path>. Image collections require an "
@@ -360,15 +579,39 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         if kind == "url"
         else "Source URL (optional provenance)"
     )
-    source_url = st.text_input(source_url_label)
+    source_url = st.text_input(
+        source_url_label,
+        value="" if document is None else document.source_url,
+        key=f"{key_prefix}_source_url",
+    )
     uploads = (
-        st.file_uploader("Local input", accept_multiple_files=True)
+        st.file_uploader(
+            "Local input",
+            accept_multiple_files=True,
+            key=f"{key_prefix}_files",
+        )
         if kind != "url"
         else None
     )
+    upload_values = tuple(uploads or ())
+    fingerprint = _upload_input_fingerprint(
+        kind=kind,
+        title=title,
+        source_type_id=source_type_id,
+        external_id=external_id,
+        status_id=status_id,
+        source_url=source_url,
+        process_id=process_id,
+        role_id=role_id,
+        document_id=None if document is None else document.id,
+        snapshot_revision=int(st.session_state.get("snapshot_revision", 0)),
+        uploads=upload_values,
+    )
     title_is_valid = bool(title.strip()) or kind == "markdown"
-    identity_is_valid = kind != "image_collection" or bool(
-        external_id.strip() or source_url.strip()
+    identity_is_valid = (
+        document is not None
+        or kind != "image_collection"
+        or bool(external_id.strip() or source_url.strip())
     )
     valid = bool(
         title_is_valid
@@ -377,14 +620,24 @@ def _upload(config: UiRuntimeConfig | None) -> None:
         and status_id
         and (source_url.strip() if kind == "url" else uploads)
     )
-    if _action_button("Preview", disabled=blocked or missing or not valid):
+    preview_key = f"{key_prefix}_preview"
+    fingerprint_key = f"{key_prefix}_preview_fingerprint"
+    if _action_button(
+        "Preview",
+        disabled=blocked or missing or not valid,
+        key=f"{key_prefix}_preview_action",
+    ):
+        _invalidate_upload_preview(
+            cast(MutableMapping[str, Any], st.session_state),
+            preview_key=preview_key,
+            fingerprint_key=fingerprint_key,
+        )
         try:
             assert config is not None
             input_root, input_path = config.working_root, ""
             if kind != "url":
-                local_uploads = tuple(uploads or ())
-                input_path = primary_upload_name(cast(SourceKind, kind), local_uploads)
-                input_root = stage_uploads(config.working_root, local_uploads)
+                input_path = primary_upload_name(cast(SourceKind, kind), upload_values)
+                input_root = stage_uploads(config.working_root, upload_values)
             request = IngestionRequest(
                 kind=cast(SourceKind, kind),
                 title=title,
@@ -395,9 +648,10 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 input_path=input_path,
                 process_id=process_id or None,
                 role_id=role_id or None,
+                document_id=None if document is None else document.id,
             )
             try:
-                st.session_state.preview = _run_visible_operation(
+                generated_preview = _run_visible_operation(
                     "ingestion_preview",
                     "Подготовка документа… Подождите.",
                     lambda: preview_ingestion(
@@ -407,12 +661,22 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                         input_root=input_root,
                     ),
                 )
+                st.session_state[preview_key] = generated_preview
+                st.session_state[fingerprint_key] = fingerprint
             finally:
                 if kind != "url":
                     remove_staging_directory(input_root, config.working_root)
         except (ValueError, OSError, RuntimeError, ValidationError):
             _record_error("Ingestion preview failed. Check inputs and runtime paths.")
-    preview = st.session_state.preview
+    stored_preview = st.session_state.get(preview_key)
+    preview = _current_upload_preview(
+        cast(MutableMapping[str, Any], st.session_state),
+        preview_key=preview_key,
+        fingerprint_key=fingerprint_key,
+        fingerprint=fingerprint,
+    )
+    if stored_preview is not None and preview is None:
+        st.warning("Inputs changed. Run Preview again before Commit.")
     if preview is not None:
         st.json(
             {
@@ -428,9 +692,14 @@ def _upload(config: UiRuntimeConfig | None) -> None:
             st.markdown("#### Potential downloads")
             for url in preview.extracted.downloadable_urls:
                 st.link_button(url, url)
-    if _action_button("Commit", disabled=blocked or missing or preview is None):
+    if _action_button(
+        "Commit",
+        disabled=blocked or missing or preview is None,
+        key=f"{key_prefix}_commit_action",
+    ):
         try:
             assert config is not None
+            assert preview is not None
             committed = _run_visible_operation(
                 "ingestion_commit",
                 "Загрузка документа… Подождите.",
@@ -439,7 +708,14 @@ def _upload(config: UiRuntimeConfig | None) -> None:
                 ),
             )
             mark_snapshot_dirty(st.session_state, committed)
-            st.session_state.preview = None
+            st.session_state[preview_key] = None
+            st.session_state[fingerprint_key] = None
+            if document is not None:
+                st.session_state.document_notice = (
+                    "success",
+                    f"Version {preview.version} was committed for {document.id}.",
+                )
+                st.rerun()
             st.success(
                 "Committed to the session snapshot and working root. No dump or DB was published."  # noqa: E501
             )
@@ -447,6 +723,26 @@ def _upload(config: UiRuntimeConfig | None) -> None:
             _record_error(
                 "Ingestion commit failed. No session snapshot change was applied."
             )
+
+
+@st.dialog("Upload new version", width="large")
+def _version_upload_dialog(config: UiRuntimeConfig | None, document_id: str) -> None:
+    document = next(
+        (
+            item
+            for item in st.session_state.snapshot.documents
+            if item.id == document_id
+        ),
+        None,
+    )
+    if document is None:
+        st.error("The selected document is no longer available.")
+        return
+    _render_upload(
+        config,
+        key_prefix=f"version_{document_id}",
+        document=document,
+    )
 
 
 def _render_document_preview(snapshot: GraphSnapshot, summary: DocumentSummary) -> None:
@@ -473,16 +769,30 @@ def _render_document_preview(snapshot: GraphSnapshot, summary: DocumentSummary) 
                 st.info("This document has no indexed text content.")
             if view.assets:
                 st.markdown("#### Assets")
-                st.json([asset.model_dump(mode="json") for asset in view.assets])
+                st.json([_node_record("Asset", asset) for asset in view.assets])
     except (TypeError, ValueError):
         _record_error("Selected document could not be previewed.")
 
 
 def _render_document_actions(
-    *, blocked: bool, snapshot: GraphSnapshot, summary: DocumentSummary
+    *,
+    config: UiRuntimeConfig | None,
+    blocked: bool,
+    snapshot: GraphSnapshot,
+    summary: DocumentSummary,
 ) -> None:
-    del blocked, snapshot
+    del snapshot
     document = summary.document
+    if _action_button(
+        "Upload new version",
+        disabled=blocked,
+        key=f"upload_new_version_{document.id}",
+    ):
+        key_prefix = f"version_{document.id}"
+        _clear_upload_state(
+            cast(MutableMapping[str, Any], st.session_state), key_prefix
+        )
+        _version_upload_dialog(config, document.id)
     if document.source_url.startswith(("http://", "https://")):
         st.link_button("Open source URL", document.source_url)
     elif document.source_url:
@@ -773,6 +1083,10 @@ def _documents(config: UiRuntimeConfig | None) -> None:
                 "source_url": item.document.source_url,
                 "external_id": item.document.external_id,
                 "summary": item.document.summary,
+                **{
+                    name: _node_record("Document", item.document)[name]
+                    for name in _custom_property_names("Document")
+                },
                 "format": item.document.content_format,
                 "local_path": "" if item.version is None else item.version.local_path,
                 "version": None if item.version is None else item.version.version,
@@ -794,6 +1108,7 @@ def _documents(config: UiRuntimeConfig | None) -> None:
             "assets",
             "count_links_out",
             "count_links_in",
+            *_custom_property_names("Document"),
         ),
         column_config={
             "selected": st.column_config.CheckboxColumn(
@@ -821,7 +1136,10 @@ def _documents(config: UiRuntimeConfig | None) -> None:
     else:
         _render_document_preview(snapshot, selected_summary)
         _render_document_actions(
-            blocked=blocked, snapshot=snapshot, summary=selected_summary
+            config=config,
+            blocked=blocked,
+            snapshot=snapshot,
+            summary=selected_summary,
         )
 
     _render_title_backfill(blocked=blocked, snapshot=snapshot)
@@ -927,12 +1245,12 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
             _record_error(
                 "Chunk generation failed safely; the snapshot was not changed."
             )
-    st.dataframe([item.model_dump() for item in snapshot.chunks])
-    st.dataframe([item.model_dump() for item in snapshot.assets])
+    st.dataframe([_node_record("Chunk", item) for item in snapshot.chunks])
+    st.dataframe([_node_record("Asset", item) for item in snapshot.assets])
     st.dataframe(
         [
             {
-                **item.model_dump(),
+                **_node_record("Embedding", item),
                 "history": "current" if item.is_current else "historical",
             }
             for item in snapshot.embeddings
@@ -1473,8 +1791,8 @@ def _chat(config: UiRuntimeConfig | None) -> None:
 
 
 def _errors(config: UiRuntimeConfig | None) -> None:
-    st.subheader("Errors/Import report")
-    blocked = _blocked(config)
+    del config
+    st.subheader("Errors")
     st.write(st.session_state.errors or "No operation errors.")
     st.caption(f"Application log: {application_log_path()}")
     try:
@@ -1489,57 +1807,3 @@ def _errors(config: UiRuntimeConfig | None) -> None:
             file_name="mvp-v2-app.log",
             mime="text/plain",
         )
-    available = (
-        config is not None
-        and config.working_root.is_dir()
-        and not config.working_root.is_symlink()
-    )
-    if _action_button("Preview legacy import", disabled=blocked or not available):
-        try:
-            assert config is not None
-            service = LegacyMigrationService(
-                importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
-            )
-            st.session_state.import_result = _run_visible_operation(
-                "legacy_import_preview",
-                "Проверка legacy-данных… Подождите.",
-                lambda: service.preview(runtime_data_root=config.working_root),
-            )
-        except (ValueError, OSError, RuntimeError):
-            _record_error("Legacy import preview failed. No data was published.")
-    result = st.session_state.get("import_result")
-    if result is not None:
-        st.json(result.report.model_dump(mode="json"))
-    approved = st.text_input(
-        "Exact approved report_id", value="", placeholder="Not pre-approved"
-    )
-    approve = st.checkbox("I reviewed the exact report and snapshot hash", value=False)
-    if _action_button(
-        "Approve and publish legacy import",
-        disabled=blocked or result is None or not approve or not approved.strip(),
-    ):
-        try:
-            assert config is not None
-            service = LegacyMigrationService(
-                importer=CsvLegacyImporter(), dump_repository=FilesystemDumpRepository()
-            )
-            typed = cast(LegacyImportResult, result)
-            manifest = _run_visible_operation(
-                "legacy_import_publication",
-                "Импорт legacy-данных… Подождите.",
-                lambda: service.publish(
-                    result=typed,
-                    approved_report_id=approved,
-                    dumps_root=config.dumps_root,
-                    media_resolver=FilesystemMediaResolver(config.working_root),
-                    published_at=datetime.now(UTC),
-                ),
-            )
-            dump_path = config.dumps_root / f"dump-{manifest.dump_number:06d}"
-            bind_snapshot(st.session_state, typed.snapshot, manifest, dump_path)
-            st.session_state.active_db = None
-            st.success("Approved legacy snapshot published and loaded into session.")
-        except (ValueError, OSError, RuntimeError):
-            _record_error(
-                "Legacy approval or publication failed. Check exact report ID and report facts."  # noqa: E501
-            )

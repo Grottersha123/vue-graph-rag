@@ -19,7 +19,6 @@ from mvp_v2.application.dto.deletion import (
     DeletionCommand,
     GraphNodeRef,
 )
-from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -30,6 +29,7 @@ from mvp_v2.application.dto.retrieval import (
     VectorQuery,
 )
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.manifests import (
     DATABASE_FORMAT,
     DUMP_FORMAT,

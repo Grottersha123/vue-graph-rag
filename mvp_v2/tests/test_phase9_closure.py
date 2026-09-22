@@ -4,7 +4,7 @@ import hashlib
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,6 @@ import pytest
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.application.chat import NOT_ENOUGH_EVIDENCE, ChatError, ChatService
 from mvp_v2.application.dto.chat import ChatRequest
-from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -22,14 +21,27 @@ from mvp_v2.application.dto.retrieval import (
     SubjectRef,
 )
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.relations import RelationError, RelationKind, RelationService
-from mvp_v2.domain.schema_registry import SCHEMA_PROFILE_SHA256
+from mvp_v2.domain import graph
+from mvp_v2.domain.schema_registry import (
+    NODE_SPECS,
+    SCHEMA_PROFILE_SHA256,
+    PropertySpec,
+    ScalarType,
+)
 from mvp_v2.ports.media import MediaVerificationError
 from mvp_v2.presentation.app import (
     _asset_label,
+    _clear_upload_state,
+    _current_upload_preview,
+    _custom_property_names,
     _deletion_block_reason,
+    _invalidate_upload_preview,
+    _node_record,
     _preferred_option_index,
     _run_visible_operation,
+    _upload_input_fingerprint,
     _working_root_identity,
 )
 from mvp_v2.presentation.controller import (
@@ -314,7 +326,7 @@ def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
         "LadybugDB",
         "Search",
         "Chatbot",
-        "Errors/Import report",
+        "Errors",
     ]
     labels = {button.label for button in app.button}
     assert {
@@ -324,16 +336,143 @@ def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
         "Search evidence",
         "Clear chat history",
         "Commit changes",
+        "Initialize workspace",
         "Publish changes as new dump",
     } <= labels
     assert "Confirm publish current snapshot as next immutable dump" not in {
         checkbox.label for checkbox in app.checkbox
     }
     assert "Publish current snapshot" not in labels
+    assert "Preview legacy import" not in labels
+    assert "Approve and publish legacy import" not in labels
     assert any(
         item.value == "No canonical dump is loaded." for item in app.sidebar.info
     )
+    assert any(
+        "Workspace needs current reference data" in item.value for item in app.warning
+    )
     assert any(item.value == "Active DB: none" for item in app.sidebar.caption)
+
+
+def _upload_fingerprint(
+    *, title: str, content: bytes, snapshot_revision: int = 1
+) -> str:
+    return _upload_input_fingerprint(
+        kind="markdown",
+        title=title,
+        source_type_id="source",
+        external_id="guide",
+        status_id="status",
+        source_url="",
+        process_id="process",
+        role_id="role",
+        document_id="document",
+        snapshot_revision=snapshot_revision,
+        uploads=(Upload(name="guide.md", content=content),),
+    )
+
+
+def test_upload_preview_binding_rejects_changed_inputs() -> None:
+    original = _upload_fingerprint(title="Guide", content=b"version one")
+    changed_title = _upload_fingerprint(title="New title", content=b"version one")
+    changed_file = _upload_fingerprint(title="Guide", content=b"version two")
+    changed_snapshot = _upload_fingerprint(
+        title="Guide", content=b"version one", snapshot_revision=2
+    )
+    state: dict[str, object] = {
+        "version_document_preview": "preview",
+        "version_document_preview_fingerprint": original,
+    }
+
+    assert (
+        _current_upload_preview(
+            state,
+            preview_key="version_document_preview",
+            fingerprint_key="version_document_preview_fingerprint",
+            fingerprint=original,
+        )
+        == "preview"
+    )
+    for fingerprint in (changed_title, changed_file, changed_snapshot):
+        assert (
+            _current_upload_preview(
+                state,
+                preview_key="version_document_preview",
+                fingerprint_key="version_document_preview_fingerprint",
+                fingerprint=fingerprint,
+            )
+            is None
+        )
+
+
+def test_failed_repreview_cannot_leave_previous_preview_committable() -> None:
+    state: dict[str, object] = {
+        "preview": "successful-old-preview",
+        "fingerprint": "f" * 64,
+    }
+
+    _invalidate_upload_preview(
+        state,
+        preview_key="preview",
+        fingerprint_key="fingerprint",
+    )
+
+    assert state == {"preview": None, "fingerprint": None}
+
+
+def test_reopening_version_dialog_clears_only_its_widget_state() -> None:
+    state: dict[str, object] = {
+        "version_document_external_id": "stale-id",
+        "version_document_files": (b"stale",),
+        "version_document_preview": "stale-preview",
+        "version_document_preview_fingerprint": "f" * 64,
+        "upload_title": "unrelated",
+    }
+
+    _clear_upload_state(state, "version_document")
+
+    assert state == {"upload_title": "unrelated"}
+
+
+def test_node_records_flatten_only_configured_custom_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = build_valid_snapshot()
+    document_spec = next(item for item in NODE_SPECS if item.table_name == "Document")
+    configured = replace(
+        document_spec,
+        properties=(
+            *document_spec.properties,
+            PropertySpec(
+                name="review_note",
+                scalar_type=ScalarType.STRING,
+                required_on_read=False,
+                default="not reviewed",
+                custom=True,
+            ),
+        ),
+    )
+    specs = tuple(
+        configured if item.table_name == "Document" else item for item in NODE_SPECS
+    )
+    monkeypatch.setattr("mvp_v2.presentation.app.NODE_SPECS", specs)
+    document = snapshot.documents[0].model_copy(
+        update={
+            "custom_properties": (
+                graph.CustomProperty(name="review_note", value="approved"),
+            )
+        }
+    )
+
+    document_record = _node_record("Document", document)
+    chunk_record = _node_record("Chunk", snapshot.chunks[0])
+
+    assert "custom_properties" not in document_record
+    assert "custom_properties" not in chunk_record
+    assert document_record["review_note"] == "approved"
+    assert "review_note" not in chunk_record
+    assert _custom_property_names("Document") == ("review_note",)
+    assert _custom_property_names("Chunk") == ()
 
 
 def test_database_scan_and_stale_decision_never_opens_native_db(tmp_path: Path) -> None:

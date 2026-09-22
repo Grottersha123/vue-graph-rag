@@ -7,12 +7,12 @@ from pathlib import Path
 
 from mvp_v2.adapters.csv.snapshot import write_snapshot
 from mvp_v2.adapters.ladybug import load_verified_dump
-from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.dump_restamp import (
     RestampError,
     apply_dump_restamp,
     plan_dump_restamp,
 )
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.manifests import (
     DUMP_FORMAT,
     DumpManifest,
@@ -72,6 +72,31 @@ def test_healthy_dump_needs_no_repairs(tmp_path: Path) -> None:
     assert not plan.aborted
     assert plan.report_lines == ()
     assert plan.tables_to_write == {}
+
+
+def test_foreign_schema_profile_is_not_restamped(tmp_path: Path) -> None:
+    dump, _ = _build_dump(tmp_path)
+    manifest = DumpManifest.model_validate_json((dump / "manifest.json").read_bytes())
+    foreign_profile = "f" * 64
+    foreign = manifest.model_copy(
+        update={
+            "schema_profile_sha256": foreign_profile,
+            "run_id": compute_dump_run_id(
+                manifest.dump_number,
+                manifest.published_at,
+                manifest.files,
+                schema_profile_sha256=foreign_profile,
+            ),
+        }
+    )
+    (dump / "manifest.json").write_bytes(
+        canonical_json_bytes(foreign.canonical_payload())
+    )
+
+    plan = plan_dump_restamp(dump)
+
+    assert plan.aborted
+    assert plan.problems == ("dump schema profile does not match current config",)
 
 
 def test_orphan_edge_is_dropped_without_resign(tmp_path: Path) -> None:

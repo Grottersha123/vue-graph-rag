@@ -5,48 +5,24 @@ Status: active implementation plan. The canonical graph contract is `docs/schema
 ## Boundaries
 
 - New code and project configuration live only under `mvp_v2/`.
-- `mvp/mvp_data` is a read-only initial import source.
+- `mvp/` data and CSV artifacts are unsupported and are not imported.
 - `mvp/streamlit_app.py` is a read-only UX reference, not code to copy blindly.
 - `agentic_mvp` is a read-only source of tested ideas and failure lessons.
 - Runtime Python lives in `/tmp/vue-graph-rag-mvp-v2/.venv`.
 - Do not read `.env`, modify the repository `.venv`, or open existing binary `.lbdb`.
 - Root `pyproject.toml` and `uv.lock` remain unchanged.
 
-## Legacy source mapping
-
-| Legacy source | MVP v2 target/transformation |
-|---|---|
-| `SourceType.csv` | Validate and import `SourceType`. |
-| `Document.csv` | Import target Document fields. Move `source_type` to a relation; do not copy legacy `sha256`, `local_path`, `status`, or `source_format` as Document properties. |
-| `HAS_DOCUMENT.csv` | Reverse `SourceType -> Document` into `Document -> HAS_SOURCE_TYPE -> SourceType`. |
-| `DocumentVersion.csv` | Validate and import `DocumentVersion`; ownership comes only from `HAS_VERSION`. |
-| `HAS_VERSION.csv` | Import `Document -> DocumentVersion`; construct immediate-predecessor `SUPERSEDES` when absent. |
-| `Asset.csv` | Import Asset metadata, description, and OCR. The vision operation may replace `description`. |
-| `HAS_ASSET.csv` | Import `DocumentVersion -> Asset`. |
-| `Role.csv`, `FOR_ROLE.csv` | Import directly after endpoint validation. `support` remains a Role. |
-| `Status.csv`, `HAS_STATUS.csv` | Import and validate exactly one status per version. |
-| `LINKS_TO.csv` | Import valid Document-to-Document links. |
-| `manual_links.csv` | Resolve valid document endpoints into `LINKS_TO`; unresolved rows go to the import report. |
-| `image_manifest.csv` | Use only for import diagnostics/path reconciliation; it is not a graph table. |
-| `HAS_ERROR.csv` | Drop the edge table; preserve applicable text in `DocumentVersion.error` and report losses. |
-| `documents/`, `images/`, `uploads/` | Read from the operator-populated runtime working copy; retain target paths such as `documents/...` and `images/...`. |
-| Chunks and Embeddings | They do not exist in the initial legacy graph and are built later by MVP v2. |
-| Process and DESCRIBES | Legacy data does not define them reliably. Create them through Streamlit/operator input; never infer `onboarding` from arbitrary text. |
-
 ## Delivery phases
 
 1. Pydantic v2 graph/application/manifest models and executable schema registry.
 2. Deterministic typed CSV codec, graph snapshot and invariant validator.
-3. Read-only legacy importer and deterministic loss report; gated numbered dump
-   publication capability is implemented. The real `dump-000001` remains blocked on
-   operator report approval and persistent runtime roots (TODO-DATA-001/TODO-OPS-001).
+3. Strict current-schema dump publication with 22 canonical tables and schema-profile identity.
 4. Text ingestion and deterministic chunking without persisted Section nodes.
 5. Image collection ingestion and vision descriptions.
 6. Missing/all embedding workflows with the exact nine-field Embedding model.
 7. LadybugDB staged publication, one selected embedding identity and retrieval.
 8. Deletion preview/cascade, immediate active-DB rebuild and stale-DB blocking.
-9. OOP Streamlit UI based on legacy UX: Upload, Documents, Relations, Processing,
-   Databases, Search and Chatbot.
+9. Streamlit UI: Upload, Documents, Relations, Chunks & Embeddings, LadybugDB, Search, Chatbot and Errors.
 10. Offline release checks and opt-in external integration/evaluation.
 
 Each phase adds focused tests and must pass Ruff, strict mypy, and offline pytest in
@@ -55,15 +31,14 @@ the isolated runtime before the next phase is considered complete.
 ## Defaults selected for implementation
 
 - Strict immutable Pydantic v2 models with `extra="forbid"`.
-- Imported IDs are nonblank/control-free opaque strings; new IDs are deterministic.
+- IDs are nonblank/control-free opaque strings; new IDs are deterministic.
 - IDs are unique within a node table; relations supply type context.
 - Retrieval purposes: `chunk_retrieval` and `asset_description_retrieval`.
 - `non_semantic_hash_dev` is test-only and never published.
-- Asset type is `image` in schema v1.
+- Asset type is `image` in the current schema.
 - Version numbers and IDs are never renumbered after deletion.
 - Rebuild-all retains old embeddings in the cumulative dump as `is_current=false`.
-- Current graph schema version is `mvp-v2-graph-v2`; verified v1 dumps migrate in memory; dump format is `mvp-v2-dump-v1` and
-  database-manifest format is `mvp-v2-db-v1`; timestamps serialize as UTC with `Z`.
+- The only supported graph schema is `mvp-v2-graph-v2` with 22 tables and the current schema-profile SHA-256. Graph-v1/21-table artifacts and legacy headers are rejected. Dump format remains `mvp-v2-dump-v1` and database-manifest format remains `mvp-v2-db-v1`; timestamps serialize as UTC with `Z`.
 - Dump `run_id` and database `build_id` are canonical SHA-256 identities over their
   immutable manifest facts; each manifest accounts for all 22 current registry tables.
 - An empty version SHA is allowed only for an errored, non-current version whose
@@ -90,11 +65,9 @@ Before live integration, provide/approve the exact Ollama vision, text-embedding
 chat model names/versions and make them available in the operator runtime. Offline
 fake-provider tests do not require them.
 
-### TODO-DATA-001 — first import review
+### Current-schema reference bootstrap
 
-Review the generated import-loss report before `dump-000001` is accepted. In
-particular, approve unresolved manual links, legacy errors, missing files/hashes and
-Documents without Process assignments.
+Upload exposes an explicit **Initialize workspace** action. It adds only missing deterministic `SourceType` and `Status` defaults to the session snapshot, preserves existing reference tables, and performs no file/dump/database operation.
 
 ### TODO-OPS-001 — persistent runtime location
 
@@ -108,26 +81,11 @@ The vector extension must be provisioned outside application code for each runti
 HOME. The application may execute `LOAD vector` but never `INSTALL vector`.
 
 
-## Phase 3 implemented contract
+## Current artifact contract
 
-The local operator populates `mvp_v2/runtime/mvp_data/` once with ordinary filesystem
-tooling. The application does not copy or police that tree. Old `.lbdb` files must
-not be selected or used. The importer reads allowlisted CSV names and scans only
-`documents/`, `images/`, and `uploads/`; unexpected root entries are ignored.
+The application reads and publishes only current `mvp-v2-graph-v2` artifacts. A dump has exactly 22 canonical CSV tables and a matching schema-profile SHA-256. Asset uses `description`; Embedding purpose is inferred from typed owner relations and is not persisted. Unsupported graph versions, 21-table layouts, `caption`/`llm_description` Asset headers and persisted Embedding `purpose` are rejected rather than migrated.
 
-Preview is read-only. It returns a canonical graph and deterministic report. Approval
-binds the exact graph snapshot, exact source CSV hashes and row counts, reported
-issues, aggregate source file facts, and source-tree digest. There is no application-managed media copy or publication step.
-
-Publication validates the current graph and only its referenced DocumentVersion and
-Asset files through `FilesystemMediaResolver(runtime_data_root)`. It does not rehash
-uploads or orphan files. The dump writer creates all 22 current CSVs plus `manifest.json` in
-a temporary sibling and renames it to the next immutable six-digit directory. It
-assumes one local Streamlit process; it does not lock across processes or
-revalidate historical dumps.
-
-No real runtime copy, dump, database, provider, or UI operation is performed by this
-phase.
+The dump writer creates all 22 CSVs plus `manifest.json` in a temporary sibling and renames it to the next immutable six-digit directory. It assumes one local Streamlit process and does not mutate historical dumps. The separate restamp workflow repairs only current-schema dumps.
 
 ## Consolidated former Phases 4–6 — implemented offline
 

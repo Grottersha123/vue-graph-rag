@@ -6,8 +6,8 @@ from pathlib import Path
 from mvp_v2.application.manifests import DumpManifest
 from mvp_v2.application.services.validation import validate_snapshot
 from mvp_v2.domain.snapshot import GraphSnapshot
+from mvp_v2.ports.dumps import DumpRepository
 from mvp_v2.ports.media import MediaResolver, MediaVerificationError
-from mvp_v2.ports.migration import DumpRepository
 
 PUBLICATION_ERROR = "snapshot or referenced files failed publication validation"
 

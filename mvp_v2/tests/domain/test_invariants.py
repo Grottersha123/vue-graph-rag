@@ -340,7 +340,7 @@ def test_typed_subject_identity_separates_equal_chunk_and_asset_ids() -> None:
 
 def test_duplicate_ids_report_ambiguity_without_dependent_crash() -> None:
     snapshot = build_valid_snapshot()
-    duplicate = snapshot.embeddings[0].model_copy(update={"purpose": "chunk_retrieval"})
+    duplicate = snapshot.embeddings[0].model_copy()
     broken = snapshot.model_copy(
         update={"embeddings": (*snapshot.embeddings, duplicate)}
     )

@@ -6,7 +6,7 @@
 
 ## Текущая задача
 
-- [ ] ruff/mypy/pytest + независимый review + коммит (спросить пользователя)
+- [ ] Следующая задача не выбрана
 
 ## Бэклог (сначала был текущей)
 
@@ -24,6 +24,10 @@
 
 ## Готово
 
+- 2026-09-21 Change 6: shared version upload, preview fingerprinting и type-specific custom columns — APPROVE
+- 2026-09-21 Change 7: legacy loading полностью удалён; current-schema bootstrap и strict v2 artifacts — APPROVE
+- 2026-09-21 `830dc17` schema v2: summaries, summary embeddings, 22 tables и configured optional fields (v1 compatibility позже retired Change 7)
+- 2026-09-21 OpenSpec синхронизирован с schema v2 и текущим Change 6 version-upload/custom-columns
 - 2026-09-20 Documents UI: единая таблица, сворачиваемый preview и row actions
 - 2026-09-20 Upload preview: source provenance, Process/Role, HTTP(S) links
 - 2026-09-20 Тесты Markdown-assets и безопасных upload-имён

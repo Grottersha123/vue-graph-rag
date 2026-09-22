@@ -33,13 +33,14 @@ class IngestionRequest(ContractModel):
     input_path: AllowEmptyText = ""
     process_id: EntityId | None = None
     role_id: EntityId | None = None
+    document_id: EntityId | None = None
 
 
 class ExtractedAsset(ContractModel):
     name: RelativePath
     content: bytes
     mime_type: NonBlankText
-    caption: AllowEmptyMultilineText = ""
+    description: AllowEmptyMultilineText = ""
     ocr_text: AllowEmptyMultilineText = ""
     external_id: AllowEmptyText = ""
 

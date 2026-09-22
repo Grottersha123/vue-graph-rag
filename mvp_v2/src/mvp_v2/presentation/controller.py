@@ -32,20 +32,17 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     DeletionResult,
 )
-from mvp_v2.application.dto.importing import canonical_json_bytes
 from mvp_v2.application.ingestion import IngestionService
 from mvp_v2.application.ingestion_contracts import (
     IngestionPreview,
     IngestionRequest,
     SourceKind,
 )
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.manifests import DATABASE_FORMAT, DatabaseManifest, DumpManifest
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
-from mvp_v2.domain.schema_registry import (
-    GRAPH_SCHEMA_VERSION,
-    SCHEMA_PROFILE_SHA256,
-)
+from mvp_v2.domain.schema_registry import SCHEMA_PROFILE_SHA256
 from mvp_v2.domain.snapshot import GraphSnapshot
 from mvp_v2.ports.ladybug import ReplacementBuildError
 from mvp_v2.ports.media import MediaDeletionError
@@ -204,10 +201,7 @@ def scan_database_manifests(root: Path) -> tuple[tuple[Path, DatabaseManifest], 
             manifest = DatabaseManifest.model_validate_json(raw)
             if manifest.format != DATABASE_FORMAT:
                 continue
-            if (
-                manifest.graph_schema_version != GRAPH_SCHEMA_VERSION
-                or manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
-            ):
+            if manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256:
                 continue
             payload = manifest.canonical_payload()
             if canonical_json_bytes(payload) != raw:
@@ -224,9 +218,7 @@ def database_is_stale(manifest: DatabaseManifest, dump: DumpManifest | None) -> 
     if dump is None:
         return True
     return (
-        manifest.graph_schema_version != GRAPH_SCHEMA_VERSION
-        or manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
-        or dump.graph_schema_version != GRAPH_SCHEMA_VERSION
+        manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
         or dump.schema_profile_sha256 != SCHEMA_PROFILE_SHA256
         or manifest.source_dump_run_id != dump.run_id
         or manifest.source_dump_number != dump.dump_number
@@ -241,6 +233,7 @@ def bind_snapshot(
     dump_path: Path,
 ) -> None:
     state["snapshot"] = snapshot
+    state["snapshot_revision"] = int(state.get("snapshot_revision", 0)) + 1
     state["dump_manifest"] = dump
     state["selected_dump"] = dump_path
     state["snapshot_dump_run_id"] = dump.run_id
@@ -250,6 +243,7 @@ def bind_snapshot(
 
 def mark_snapshot_dirty(state: Any, snapshot: GraphSnapshot) -> None:
     state["snapshot"] = snapshot
+    state["snapshot_revision"] = int(state.get("snapshot_revision", 0)) + 1
     state["snapshot_dirty"] = True
     state["snapshot_dump_run_id"] = None
     state["active_db"] = None

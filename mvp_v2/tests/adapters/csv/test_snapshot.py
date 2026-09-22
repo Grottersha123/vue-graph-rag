@@ -1,24 +1,12 @@
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from mvp_v2.adapters.csv.snapshot import CsvSnapshotError, read_snapshot, write_snapshot
-from mvp_v2.adapters.ladybug import load_verified_dump
-from mvp_v2.application.dto.importing import canonical_json_bytes
-from mvp_v2.application.manifests import (
-    DUMP_FORMAT,
-    DumpFileEntry,
-    DumpManifest,
-    compute_dump_run_id,
-)
 from mvp_v2.domain.schema_registry import (
-    LEGACY_GRAPH_SCHEMA_VERSION,
     TABLE_NAMES,
     TABLE_SPECS,
 )
@@ -80,8 +68,8 @@ def test_reader_rejects_bad_headers_and_cell_counts(
     [
         (
             "Document",
-            "id,title,source_name,content_format,source_url,external_id,is_active",
-            "document,Title,name,markdown,,,True",
+            "id,title,source_name,content_format,source_url,external_id,is_active,summary",
+            "document,Title,name,markdown,,,True,",
         ),
         (
             "DocumentVersion",
@@ -97,14 +85,13 @@ def test_reader_rejects_bad_headers_and_cell_counts(
         ),
         (
             "Embedding",
-            "id,provider,model,model_version,purpose,dimension,vector,created_at,is_current",
-            "embedding,local,embed,v1,chunk_retrieval,2,"
-            '"[1, NaN]",2026-01-02T03:04:05.000006Z,true',
+            "id,provider,model,model_version,dimension,vector,created_at,is_current,summary_vector",
+            'embedding,local,embed,v1,2,"[1, NaN]",2026-01-02T03:04:05.000006Z,true,[]',
         ),
         (
             "Embedding",
-            "id,provider,model,model_version,purpose,dimension,vector,created_at,is_current",
-            'embedding,local,embed,v1,chunk_retrieval,2,"[true,2.0]",2026-01-02T03:04:05.000006Z,true',
+            "id,provider,model,model_version,dimension,vector,created_at,is_current,summary_vector",
+            'embedding,local,embed,v1,2,"[true,2.0]",2026-01-02T03:04:05.000006Z,true,[]',
         ),
     ],
 )
@@ -114,6 +101,31 @@ def test_reader_rejects_noncanonical_scalars(
     write_snapshot(tmp_path, build_valid_snapshot())
     (tmp_path / f"tables/{table_name}.csv").write_bytes(
         f"{header}\r\n{row}\r\n".encode()
+    )
+
+    with pytest.raises(CsvSnapshotError):
+        read_snapshot(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("table_name", "legacy_header"),
+    [
+        (
+            "Asset",
+            "id,asset_type,mime_type,source_url,local_path,external_id,sha256,position,caption,llm_description,ocr_text",
+        ),
+        (
+            "Embedding",
+            "id,provider,model,model_version,purpose,dimension,vector,created_at,is_current",
+        ),
+    ],
+)
+def test_reader_rejects_retired_legacy_headers(
+    tmp_path: Path, table_name: str, legacy_header: str
+) -> None:
+    write_snapshot(tmp_path, build_valid_snapshot())
+    (tmp_path / f"tables/{table_name}.csv").write_text(
+        legacy_header + "\r\n", encoding="utf-8", newline=""
     )
 
     with pytest.raises(CsvSnapshotError):
@@ -190,11 +202,11 @@ def test_writer_rejects_preexisting_table_entries(tmp_path: Path) -> None:
 def test_reader_requires_exact_regular_table_set(tmp_path: Path) -> None:
     write_snapshot(tmp_path, build_valid_snapshot())
     (tmp_path / "tables/extra.csv").write_text("")
-    with pytest.raises(CsvSnapshotError, match="supported registry file set"):
+    with pytest.raises(CsvSnapshotError, match="current registry file set"):
         read_snapshot(tmp_path)
     (tmp_path / "tables/extra.csv").unlink()
     (tmp_path / "tables/Role.csv").unlink()
-    with pytest.raises(CsvSnapshotError, match="supported registry file set"):
+    with pytest.raises(CsvSnapshotError, match="current registry file set"):
         read_snapshot(tmp_path)
 
 
@@ -335,146 +347,3 @@ def test_failed_table_io_cleans_staging_and_allows_retry(
     assert not (tmp_path / "tables").exists()
     assert not tuple(tmp_path.glob(".tables-*"))
     assert len(write_snapshot(tmp_path, build_valid_snapshot())) == len(TABLE_NAMES)
-
-
-def _rewrite_legacy_table(
-    path: Path, header: tuple[str, ...], rows: list[dict[str, str]]
-) -> None:
-    stream = io.StringIO(newline="")
-    writer = csv.DictWriter(
-        stream, fieldnames=header, dialect="excel", lineterminator="\r\n"
-    )
-    writer.writeheader()
-    writer.writerows(rows)
-    path.write_text(stream.getvalue(), encoding="utf-8", newline="")
-
-
-def test_reader_migrates_exact_v1_headers_and_missing_relation(
-    tmp_path: Path,
-) -> None:
-    write_snapshot(tmp_path, build_valid_snapshot())
-    tables = tmp_path / "tables"
-    (tables / "HAS_SUMMARY_EMBEDDING.csv").unlink()
-
-    document_rows = list(csv.DictReader((tables / "Document.csv").open(newline="")))
-    for row in document_rows:
-        row.pop("summary")
-    _rewrite_legacy_table(
-        tables / "Document.csv",
-        (
-            "id",
-            "title",
-            "source_name",
-            "content_format",
-            "source_url",
-            "external_id",
-            "is_active",
-        ),
-        document_rows,
-    )
-
-    chunk_rows = list(csv.DictReader((tables / "Chunk.csv").open(newline="")))
-    for row in chunk_rows:
-        row.pop("summary")
-    _rewrite_legacy_table(
-        tables / "Chunk.csv",
-        ("id", "position", "content", "content_hash"),
-        chunk_rows,
-    )
-
-    asset_rows = list(csv.DictReader((tables / "Asset.csv").open(newline="")))
-    for row in asset_rows:
-        row["caption"] = row.pop("description")
-        row["llm_description"] = "ignored legacy description"
-    _rewrite_legacy_table(
-        tables / "Asset.csv",
-        (
-            "id",
-            "asset_type",
-            "mime_type",
-            "source_url",
-            "local_path",
-            "external_id",
-            "sha256",
-            "position",
-            "caption",
-            "llm_description",
-            "ocr_text",
-        ),
-        asset_rows,
-    )
-
-    embedding_rows = list(csv.DictReader((tables / "Embedding.csv").open(newline="")))
-    for row in embedding_rows:
-        row["purpose"] = (
-            "chunk_retrieval"
-            if row["id"] == "embedding-chunk"
-            else "asset_description_retrieval"
-        )
-        row.pop("summary_vector")
-    legacy_embedding_header = (
-        "id",
-        "provider",
-        "model",
-        "model_version",
-        "purpose",
-        "dimension",
-        "vector",
-        "created_at",
-        "is_current",
-    )
-    _rewrite_legacy_table(
-        tables / "Embedding.csv", legacy_embedding_header, embedding_rows
-    )
-    chunk_row = next(row for row in embedding_rows if row["id"] == "embedding-chunk")
-    chunk_row["purpose"] = "asset_description_retrieval"
-    _rewrite_legacy_table(
-        tables / "Embedding.csv", legacy_embedding_header, embedding_rows
-    )
-    with pytest.raises(CsvSnapshotError, match="owner relation"):
-        read_snapshot(tmp_path)
-    chunk_row["purpose"] = "chunk_retrieval"
-    _rewrite_legacy_table(
-        tables / "Embedding.csv", legacy_embedding_header, embedding_rows
-    )
-
-    migrated = read_snapshot(tmp_path)
-
-    assert migrated.documents[0].summary == ""
-    assert migrated.chunks[0].summary == ""
-    assert migrated.assets[0].description == "desc"
-    assert all(item.summary_vector == () for item in migrated.embeddings)
-    assert migrated.has_summary_embeddings == ()
-
-    facts = tuple(
-        DumpFileEntry(
-            path=f"tables/{path.name}",
-            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-            row_count=max(0, len(list(csv.reader(path.open(newline="")))) - 1),
-        )
-        for path in sorted(tables.glob("*.csv"))
-    )
-    published_at = datetime(2026, 9, 21, tzinfo=UTC)
-    run_id = compute_dump_run_id(
-        1,
-        published_at,
-        facts,
-        graph_schema_version=LEGACY_GRAPH_SCHEMA_VERSION,
-        schema_profile_sha256="",
-    )
-    manifest = DumpManifest(
-        format=DUMP_FORMAT,
-        graph_schema_version=LEGACY_GRAPH_SCHEMA_VERSION,
-        schema_profile_sha256="",
-        dump_number=1,
-        published_at=published_at,
-        run_id=run_id,
-        files=facts,
-    )
-    (tmp_path / "manifest.json").write_bytes(
-        canonical_json_bytes(manifest.canonical_payload())
-    )
-
-    loaded_manifest, verified = load_verified_dump(tmp_path)
-    assert loaded_manifest.graph_schema_version == LEGACY_GRAPH_SCHEMA_VERSION
-    assert verified == migrated

@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from mvp_v2.adapters.csv.snapshot import parse_table_model, write_snapshot
-from mvp_v2.application.dto.importing import canonical_json_bytes
+from mvp_v2.application.json_encoding import canonical_json_bytes
 from mvp_v2.application.manifests import (
     DUMP_FORMAT,
     DumpManifest,
@@ -57,10 +57,12 @@ def _read_tables(
     tables: dict[str, tuple[tuple[str, ...], list[Row]]] = {}
     for spec in TABLE_SPECS:
         table_path = dump / f"tables/{spec.table_name}.csv"
-        if not table_path.exists() and spec.table_name == "HAS_SUMMARY_EMBEDDING":
+        try:
+            raw = table_path.read_text(encoding="utf-8")
+        except OSError as error:
+            problems.append(f"{spec.table_name}.csv cannot be read: {error}")
             tables[spec.table_name] = (spec.headers, [])
             continue
-        raw = table_path.read_text(encoding="utf-8")
         rows = list(csv.reader(io.StringIO(raw)))
         header = tuple(rows[0]) if rows else ()
         body: list[Row] = []
@@ -88,6 +90,12 @@ def plan_dump_restamp(dump: Path) -> RestampPlan:
             dump_path=str(dump),
             aborted=True,
             problems=("manifest.json is missing or unreadable",),
+        )
+    if manifest.schema_profile_sha256 != SCHEMA_PROFILE_SHA256:
+        return RestampPlan(
+            dump_path=str(dump),
+            aborted=True,
+            problems=("dump schema profile does not match current config",),
         )
     actual_files = {path.name for path in (dump / "tables").glob("*.csv")}
     manifest_files = {Path(item.path).name for item in manifest.files}

@@ -13,7 +13,6 @@ from mvp_v2.domain import graph
 from mvp_v2.domain.field_extensions import ExtensionDefault, load_field_extensions
 from mvp_v2.domain.snapshot import GraphSnapshot
 
-LEGACY_GRAPH_SCHEMA_VERSION: Final[Literal["mvp-v2-graph-v1"]] = "mvp-v2-graph-v1"
 GRAPH_SCHEMA_VERSION: Final[Literal["mvp-v2-graph-v2"]] = "mvp-v2-graph-v2"
 NODE_TABLE_NAMES = (
     "SourceType",
@@ -415,9 +414,6 @@ RELATION_SPECS: tuple[RelationSpec, ...] = (
 
 
 TABLE_SPECS: tuple[NodeSpec | RelationSpec, ...] = (*NODE_SPECS, *RELATION_SPECS)
-LEGACY_TABLE_NAMES: Final = tuple(
-    name for name in TABLE_NAMES if name != "HAS_SUMMARY_EMBEDDING"
-)
 
 
 def _schema_profile_sha256() -> str:
