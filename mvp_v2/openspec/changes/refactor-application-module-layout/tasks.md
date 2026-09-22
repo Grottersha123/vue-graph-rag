@@ -19,4 +19,4 @@
 
 - [x] 3.1 Запустить focused tests для graph operations, RAG, dump lifecycle и presentation imports; все выбранные тесты должны пройти.
 - [x] 3.2 Запустить Ruff, strict mypy и полный pytest через окружение `mvp_v2`; все три проверки должны завершиться с exit code 0.
-- [ ] 3.3 Проверить `git diff --check`, повторно прочитать изменённые файлы и убедиться, что runtime data, `.env`, `.venv` и `*.lbdb` не изменены.
+- [x] 3.3 Проверить `git diff --check`, повторно прочитать изменённые файлы и убедиться, что runtime data, `.env`, `.venv` и `*.lbdb` не изменены.
