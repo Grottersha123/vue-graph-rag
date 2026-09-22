@@ -43,6 +43,6 @@ RAG-код, операции над изменяемым `GraphSnapshot` и dump
 
 ## Impact
 
-- Затрагиваются только расположение application-модулей, импорты, composition points и тестовые import paths.
+- Затрагиваются только расположение application-модулей, импорты, composition points и тестовые import paths. Также проверяются импорты в Jupyter notebooks.
 - Новые зависимости и внешние сервисы не добавляются.
 - После переноса должны пройти существующие Ruff, mypy и pytest checks.
