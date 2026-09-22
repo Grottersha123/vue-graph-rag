@@ -15,5 +15,5 @@
 
 - [x] 3.1 Run notebook compile and contract tests for both serialization branches.
 - [ ] 3.2 Update and verify README/notebook artifact documentation.
-- [ ] 3.3 Run Ruff, strict mypy and full pytest through the `mvp_v2` environment.
-- [ ] 3.4 Check `git diff --check` and confirm no runtime data, `.env`, `.venv` or `*.lbdb` files changed.
+- [x] 3.3 Run Ruff, strict mypy and full pytest through the `mvp_v2` environment.
+- [x] 3.4 Check `git diff --check` and confirm no runtime data, `.env`, `.venv` or `*.lbdb` files changed.
