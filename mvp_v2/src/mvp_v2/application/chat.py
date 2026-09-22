@@ -4,6 +4,7 @@ from typing import Final, Protocol
 
 from mvp_v2.application.conversation.conf import (
     DEFAULT_PROMPT_TEMPLATE,
+    INSUFFICIENT_EVIDENCE_TOKEN,
     PromptTemplate,
 )
 from mvp_v2.application.conversation.errors import ChatError
@@ -65,9 +66,7 @@ class ChatService:
             raise ChatError("question exceeds configured character limit")
         evidence = self._search.search(request.search)
         if not evidence:
-            return ChatAnswer(
-                answer=NOT_ENOUGH_EVIDENCE, citations=(), evidence=(), generated=False
-            )
+            return _insufficient_evidence_answer()
         evidence = evidence[: self._max_evidence_items]
         if (
             not request.authorization.allow
@@ -79,6 +78,8 @@ class ChatService:
         if not response.strip():
             raise ChatError("local generation returned an empty response")
         raw_answer = response.strip()
+        if raw_answer == INSUFFICIENT_EVIDENCE_TOKEN:
+            return _insufficient_evidence_answer()
         try:
             referenced = referenced_numbers(raw_answer, len(evidence))
         except ChatError:
@@ -87,6 +88,8 @@ class ChatService:
             if not response.strip():
                 raise ChatError("local generation returned an empty response") from None
             raw_answer = response.strip()
+            if raw_answer == INSUFFICIENT_EVIDENCE_TOKEN:
+                return _insufficient_evidence_answer()
             referenced = referenced_numbers(raw_answer, len(evidence))
         answer = render_answer(raw_answer, evidence)
         citations = tuple(
@@ -118,6 +121,15 @@ class ChatService:
             max_prompt_chars=self._max_prompt_chars,
             template=self._prompt_template,
         )
+
+
+def _insufficient_evidence_answer() -> ChatAnswer:
+    return ChatAnswer(
+        answer=NOT_ENOUGH_EVIDENCE,
+        citations=(),
+        evidence=(),
+        generated=False,
+    )
 
 
 def _citation(number: int, evidence: Evidence) -> Citation:

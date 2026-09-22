@@ -14,6 +14,7 @@ from mvp_v2.application.chat import NOT_ENOUGH_EVIDENCE, ChatError, ChatService
 from mvp_v2.application.conversation.conf import (
     DEFAULT_MCP_PROMPT_TEMPLATE,
     DEFAULT_PROMPT_TEMPLATE,
+    INSUFFICIENT_EVIDENCE_TOKEN,
     MCP_PROMPT_TEMPLATES,
     PROMPT_TEMPLATES,
     render_mcp_answer_prompt,
@@ -173,6 +174,31 @@ def test_chat_without_evidence_has_fixed_answer_and_zero_generation_calls() -> N
     assert "Попробуйте уточнить вопрос" in answer.answer
 
 
+def test_chat_converts_exact_insufficient_evidence_marker_to_safe_fallback() -> None:
+    model = SequenceModel((INSUFFICIENT_EVIDENCE_TOKEN,))
+
+    answer = ChatService(Search((evidence(),)), model).answer(request())
+
+    assert answer.answer == NOT_ENOUGH_EVIDENCE
+    assert answer.citations == ()
+    assert answer.evidence == ()
+    assert answer.generated is False
+    assert len(model.calls) == 1
+    assert INSUFFICIENT_EVIDENCE_TOKEN in model.calls[0]
+
+
+def test_chat_accepts_insufficient_evidence_marker_on_citation_retry() -> None:
+    model = SequenceModel(("Unsupported refusal", INSUFFICIENT_EVIDENCE_TOKEN))
+
+    answer = ChatService(Search((evidence(),)), model).answer(request())
+
+    assert answer.answer == NOT_ENOUGH_EVIDENCE
+    assert answer.citations == ()
+    assert answer.generated is False
+    assert len(model.calls) == 2
+    assert INSUFFICIENT_EVIDENCE_TOKEN in model.calls[1]
+
+
 def test_chat_renders_human_source_reference_and_keeps_typed_citation() -> None:
     model = Model()
     answer = ChatService(Search((evidence(),)), model).answer(request())
@@ -181,6 +207,8 @@ def test_chat_renders_human_source_reference_and_keeps_typed_citation() -> None:
     assert answer.citations[0].evidence_id == answer.evidence[0].embedding_id
     assert "caring and patient VEUnicorn student support specialist" in model.calls[0]
     assert "Answer in Russian" in model.calls[0]
+    assert "present it as a practical instruction" in model.calls[0]
+    assert "User request: Question?" in model.calls[0]
     assert len(model.calls[0]) < 16_000
 
 
@@ -234,8 +262,8 @@ def test_chat_retries_once_for_invalid_technical_citation() -> None:
 
     assert answer.answer == rendered_response("Correct answer [1]")
     assert len(model.calls) == 2
-    assert "The only allowed tokens are: [1]." in model.calls[1]
-    assert "Do not add a SOURCE block or metadata." in model.calls[1]
+    assert "Use only: [1]." in model.calls[1]
+    assert "Do not add source names, metadata, or a SOURCE section." in model.calls[1]
 
 
 def test_chat_renders_only_strict_citations_and_preserves_other_brackets() -> None:
