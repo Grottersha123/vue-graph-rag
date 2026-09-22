@@ -64,7 +64,7 @@ Tests mirror these responsibilities under `mvp_v2/tests/`.
 
 | Phase | Primary modules | Main agent role |
 |---|---|---|
-| 1. Pydantic contract | `domain/base.py`, `domain/graph.py`, `domain/snapshot.py`, `domain/schema_registry.py`, `application/manifests.py`, `application/dto/` | Python implementer |
+| 1. Pydantic contract | `domain/base.py`, `domain/graph.py`, `domain/snapshot.py`, `domain/schema_registry.py`, `application/dump_lifecycle/manifests.py`, `application/dto/` | Python implementer |
 | 2. CSV and validation | `adapters/csv/`, `domain/invariants.py`, dump application service | Python implementer |
 | 3. Current dump publication | `adapters/csv/`, `adapters/filesystem/dumps.py`, publication service | Python implementer |
 | 4. Text ingestion | `domain/chunking.py`, ingestion service, document adapters | Python implementer |

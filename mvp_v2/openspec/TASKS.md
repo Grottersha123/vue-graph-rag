@@ -12,7 +12,7 @@
 
 - Change 1 «add-dump-repair-restamp»: задачи 1.6–1.9 из
   `openspec/changes-2026-09-15.md` (файл
-  `src/mvp_v2/application/dump_restamp.py`, тесты
+  `src/mvp_v2/application/dump_lifecycle/dump_restamp.py`, тесты
   `tests/test_dump_restamp.py`):
   1.6 precondition-хеши всех файлов + атомарный staging-swap с backup
   1.7 тесты stale-plan и write-failure (оригинал не тронут)
