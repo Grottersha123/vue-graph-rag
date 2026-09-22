@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
-from mvp_v2.application.chunk_backfill import ChunkBackfillError, build_missing_chunks
+from mvp_v2.application.chunk_backfill import (
+    ChunkBackfillError,
+    build_missing_chunks,
+    chunk_mutation_impact,
+    delete_all_chunks_and_embeddings,
+    regenerate_all_chunks,
+)
 from mvp_v2.domain.snapshot import GraphSnapshot
 from tests.factories import build_valid_snapshot
 
@@ -115,3 +121,74 @@ def test_build_missing_chunks_rejects_same_id_with_conflicting_payload(
 
     with pytest.raises(ChunkBackfillError, match="payload conflicts"):
         build_missing_chunks(inconsistent, resolver)
+
+
+def test_delete_and_regenerate_preserve_non_chunk_graph(tmp_path: Path) -> None:
+    snapshot = build_valid_snapshot()
+
+    deleted = delete_all_chunks_and_embeddings(snapshot)
+    deletion_impact = chunk_mutation_impact(snapshot, deleted)
+
+    assert deleted.chunks == ()
+    assert deleted.has_chunks == ()
+    assert deleted.contains_assets == ()
+    assert deleted.has_embedding_chunks == ()
+    assert {item.id for item in deleted.embeddings} == {"embedding-asset"}
+    assert deleted.assets == snapshot.assets
+    assert deleted.has_embedding_assets == snapshot.has_embedding_assets
+    assert deletion_impact.chunks_removed == 1
+    assert deletion_impact.chunk_embeddings_removed == 1
+    assert deletion_impact.contains_asset_edges_removed == 1
+
+    content = ("A better deterministic Markdown paragraph. " * 80).encode()
+    source = tmp_path / "documents" / "a.md"
+    source.parent.mkdir()
+    source.write_bytes(content)
+    version = snapshot.document_versions[0].model_copy(
+        update={"sha256": hashlib.sha256(content).hexdigest()}
+    )
+    source_snapshot = snapshot.model_copy(update={"document_versions": (version,)})
+
+    regenerated = regenerate_all_chunks(
+        source_snapshot, FilesystemMediaResolver(tmp_path)
+    )
+    regeneration_impact = chunk_mutation_impact(source_snapshot, regenerated)
+
+    assert regenerated.chunks
+    assert all(item.id != "chunk" for item in regenerated.chunks)
+    assert len(regenerated.has_chunks) == len(regenerated.chunks)
+    assert regenerated.has_embedding_chunks == ()
+    assert {item.id for item in regenerated.embeddings} == {"embedding-asset"}
+    assert regenerated.assets == source_snapshot.assets
+    assert regeneration_impact.chunks_removed == 1
+    assert regeneration_impact.chunks_added == len(regenerated.chunks)
+    assert regeneration_impact.chunk_embeddings_removed == 1
+
+
+def test_regeneration_preserves_stable_links_and_rejects_unsupported_sources(
+    tmp_path: Path,
+) -> None:
+    content = b"hello"
+    source = tmp_path / "documents" / "a.md"
+    source.parent.mkdir()
+    source.write_bytes(content)
+    snapshot = _snapshot_without_chunks(content)
+    generated = build_missing_chunks(snapshot, FilesystemMediaResolver(tmp_path))
+    contains = (
+        build_valid_snapshot()
+        .contains_assets[0]
+        .model_copy(update={"source_id": generated.chunks[0].id})
+    )
+    with_link = generated.model_copy(update={"contains_assets": (contains,)})
+
+    updated = regenerate_all_chunks(with_link, FilesystemMediaResolver(tmp_path))
+
+    assert updated.contains_assets == (contains,)
+
+    unsupported = build_valid_snapshot()
+    document = unsupported.documents[0].model_copy(update={"content_format": "pdf"})
+    with pytest.raises(ChunkBackfillError, match="non-Markdown"):
+        regenerate_all_chunks(
+            unsupported.model_copy(update={"documents": (document,)}),
+            FilesystemMediaResolver(Path("/unused")),
+        )

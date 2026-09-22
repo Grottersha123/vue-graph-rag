@@ -80,7 +80,12 @@ class Model:
 
     def generate(self, *, prompt: str, model: str) -> str:
         self.calls.append(prompt)
-        return "Bound answer [1]"
+        source_line = next(
+            line.removeprefix("Required source line: ")
+            for line in prompt.splitlines()
+            if line.startswith("Required source line: ")
+        )
+        return f"Bound answer [1]\n<SOURCES>\n{source_line}\n</SOURCES>"
 
 
 class SequenceModel:
@@ -114,6 +119,19 @@ def evidence() -> Evidence:
         processes=("onboarding",),
         linked_document_ids=(),
     )
+
+
+def source_line(number: int) -> str:
+    return (
+        f'SOURCE [{number}] document_title="Title" document_id="document" '
+        "version=1 chunk_ordinal=1 chunk_position=0 document_chunk_count=1 "
+        'source_ref="documents/a.md"'
+    )
+
+
+def sourced_response(text: str, *numbers: int) -> str:
+    lines = "\n".join(source_line(number) for number in numbers)
+    return f"{text}\n<SOURCES>\n{lines}\n</SOURCES>"
 
 
 def request(*, generation: bool = True) -> ChatRequest:
@@ -155,35 +173,47 @@ def test_chat_without_evidence_has_fixed_answer_and_zero_generation_calls() -> N
 def test_chat_binds_response_and_numbered_citation() -> None:
     model = Model()
     answer = ChatService(Search((evidence(),)), model).answer(request())
-    assert answer.answer == "Bound answer [1]"
+    assert answer.answer == sourced_response("Bound answer [1]", 1)
     assert answer.citations[0].number == 1
     assert answer.citations[0].evidence_id == answer.evidence[0].embedding_id
     assert "Respond in Russian." in model.calls[0]
     assert len(model.calls[0]) < 16_000
 
 
-def test_chat_retries_once_for_out_of_range_citation() -> None:
-    model = SequenceModel(("Wrong citation [15]", "Correct answer:\n- first item [1]"))
+def test_chat_retries_once_for_missing_source_metadata() -> None:
+    model = SequenceModel(
+        (
+            "Answer without source metadata [1]",
+            sourced_response("Correct answer [1]", 1),
+        )
+    )
 
     answer = ChatService(Search((evidence(),)), model).answer(request())
 
-    assert answer.answer == "Correct answer:\n- first item [1]"
+    assert answer.answer == sourced_response("Correct answer [1]", 1)
     assert len(model.calls) == 2
     assert "The only allowed citation tokens are: [1]." in model.calls[1]
+    assert "one <SOURCES>...</SOURCES> block." in model.calls[1]
 
 
 def test_chat_parses_combined_and_nonsense_citation_tokens() -> None:
-    model = SequenceModel(("Ответ [1, 2] и [заметка]",))
+    model = SequenceModel((sourced_response("Ответ [1, 2] и [заметка]", 1, 2),))
 
     answer = ChatService(Search((evidence(), evidence())), model).answer(request())
 
     assert [citation.number for citation in answer.citations] == [1, 2]
 
 
-def test_chat_rejects_persistently_invalid_citation_after_one_retry() -> None:
-    model = SequenceModel(("Wrong [15]", "Still wrong [15]"))
+def test_chat_rejects_source_only_citation_and_tampered_source_line() -> None:
+    model = SequenceModel(
+        (
+            f"Unsupported claim.\n<SOURCES>\n{source_line(1)}\n</SOURCES>",
+            f"Unsupported claim [1]\n<SOURCES>\n"
+            f"{source_line(1)} forged_field=true\n</SOURCES>",
+        )
+    )
 
-    with pytest.raises(ChatError, match="cites no valid evidence number"):
+    with pytest.raises(ChatError, match="invalid source metadata"):
         ChatService(Search((evidence(),)), model).answer(request())
 
     assert len(model.calls) == 2
@@ -332,6 +362,8 @@ def test_streamlit_absent_runtime_starts_with_eight_live_tabs() -> None:
     assert {
         "Preview",
         "Build missing embeddings",
+        "Preview regenerate all chunks",
+        "Preview delete all chunks and chunk embeddings",
         "Save as new DB",
         "Search evidence",
         "Clear chat history",

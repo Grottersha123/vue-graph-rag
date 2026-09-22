@@ -85,3 +85,11 @@ snapshot before building a replacement. A failed replacement leaves the new snap
 clean and published while the old database stays stale and unselectable. Physical media
 is never deleted.
 All model providers are fixed to local Ollama; cloud fallback is not supported.
+
+## RAG batch debugging
+
+Open `notebooks/rag_batch_debug.ipynb` with the `mvp_v2` project interpreter. Set the exact Ollama chat model/version in the configuration cell. Loopback is allowed by default. A private LAN Ollama additionally requires `MVP_V2_OLLAMA_ALLOWED_LAN_HOSTS` (for example `models.local`); this is an explicit opt-in to unencrypted HTTP inside the LAN. The notebook selects a verified current-schema LadybugDB and its exact source dump, runs the editable batch through the production `SearchService` and `ChatService`, and records retrieval evidence, prompts, raw responses, final answers, latency, and errors. Generated answers must cite evidence in the answer body and copy exact `SOURCE [N]` lines inside one trailing `<SOURCES>...</SOURCES>` block. Each line contains document identity, version, one-based chunk ordinal, stored chunk position, total chunk count, and source reference. Set `EXECUTION_MODE` to `sequential` or `async`; `Run All` executes only the selected batch mode.
+
+Each sequential or four-worker async batch is automatically saved under `runtime/debug/rag-runs/YYYY-MM-DD/<UTC-run-id>/`: `run.json` stores reproducibility metadata and `results.json` stores the complete trace. The directory is git-ignored and may contain retrieved text. Student refusal cases are behavioral probes only: the current retrieval layer does not implement a role-based authorization boundary.
+
+The **Chunks & Embeddings** tab also provides preview/confirm actions to regenerate all supported current Markdown chunks or delete the complete chunk subgraph and its owned embeddings. These actions update only the session snapshot until a new dump is published.

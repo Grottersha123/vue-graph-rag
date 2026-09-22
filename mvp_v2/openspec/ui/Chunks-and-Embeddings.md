@@ -20,6 +20,15 @@
 
 `Create missing text chunks` читает media из confined working root, создаёт недостающие chunks и обновляет session snapshot. Если создавать нечего, snapshot не меняется.
 
+## Destructive chunk maintenance
+
+Два session-only действия отделены от обычного backfill:
+
+- `Preview regenerate all chunks` сначала удаляет весь chunk-контур и owned chunk embeddings из candidate, затем проверяет SHA-256 current Markdown sources и строит chunks текущей policy. Asset nodes и asset embeddings сохраняются. Совпадающие chunk-to-asset edges сохраняются; unsupported current non-Markdown chunks блокируют операцию.
+- `Preview delete all chunks and chunk embeddings` удаляет все Chunk, HAS_CHUNK, CONTAINS_ASSET, HAS_EMBEDDING_CHUNK и принадлежащие им Embedding rows. Documents, Versions, Assets, asset/summary embeddings и остальные relations сохраняются.
+
+Оба preview показывают counts, привязаны к `snapshot_revision` и требуют отдельный destructive checkbox. Commit меняет только session snapshot. Dump и DB создаются позже обычными publish/build действиями.
+
 ## Embeddings
 
 Поля операции:

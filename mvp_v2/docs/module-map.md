@@ -83,3 +83,7 @@ release and there is no cloud fallback.
 - `application/services/publication.py`: graph, media, and version-file publication gate.
 - `presentation/controller.py`: upload limits/cleanup, exact snapshot/dump binding, and UI deletion adapters.
 - `bootstrap/provision_vector.py`: explicit, confirmed external extension provisioning only.
+
+## Debug notebook
+
+- `notebooks/rag_batch_debug.ipynb`: editable 20-case batch runner over the production retrieval/chat path with full local trace export.

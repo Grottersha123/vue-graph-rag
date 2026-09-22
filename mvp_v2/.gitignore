@@ -5,3 +5,4 @@ runtime/
 .ruff_cache/
 __pycache__/
 .env
+.ipynb_checkpoints/

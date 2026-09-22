@@ -24,6 +24,7 @@
 
 ## Готово
 
+- 2026-09-22 Change 8: RAG batch notebook, strict SOURCE provenance, async dated traces, chunk maintenance и pinned Ollama LAN transport — APPROVE
 - 2026-09-21 Change 6: shared version upload, preview fingerprinting и type-specific custom columns — APPROVE
 - 2026-09-21 Change 7: legacy loading полностью удалён; current-schema bootstrap и strict v2 artifacts — APPROVE
 - 2026-09-21 `830dc17` schema v2: summaries, summary embeddings, 22 tables и configured optional fields (v1 compatibility позже retired Change 7)

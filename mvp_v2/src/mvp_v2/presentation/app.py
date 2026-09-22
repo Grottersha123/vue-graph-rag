@@ -21,7 +21,13 @@ from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_du
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
-from mvp_v2.application.chunk_backfill import build_missing_chunks
+from mvp_v2.application.chunk_backfill import (
+    ChunkMutationImpact,
+    build_missing_chunks,
+    chunk_mutation_impact,
+    delete_all_chunks_and_embeddings,
+    regenerate_all_chunks,
+)
 from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.document_editing import (
     DocumentMetadataUpdate,
@@ -102,6 +108,17 @@ _ResultT = TypeVar("_ResultT")
 
 def _environment_text(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+def _ollama_adapter(base_url: str) -> OllamaAdapter:
+    allowed_lan_hosts = frozenset(
+        item.strip()
+        for item in os.environ.get("MVP_V2_OLLAMA_ALLOWED_LAN_HOSTS", "").split(",")
+        if item.strip()
+    )
+    return OllamaAdapter(
+        LocalHttpTransport(base_url, allowed_lan_hosts=allowed_lan_hosts)
+    )
 
 
 def _environment_dimension() -> int:
@@ -209,6 +226,9 @@ def _initialize_state() -> None:
     st.session_state.setdefault("snapshot_dump_run_id", None)
     st.session_state.setdefault("snapshot_dirty", True)
     st.session_state.setdefault("restamp_plan", None)
+    st.session_state.setdefault("chunk_regeneration_preview", None)
+    st.session_state.setdefault("chunk_deletion_preview", None)
+    st.session_state.setdefault("chunk_preview_sequence", 0)
 
 
 def _render_session_status(config: UiRuntimeConfig | None) -> None:
@@ -1220,6 +1240,67 @@ def _model_fields(prefix: str = "") -> tuple[str, str, str, int]:
     return base, model.strip(), version.strip(), int(dimension)
 
 
+def _chunk_impact_record(impact: ChunkMutationImpact) -> dict[str, int]:
+    return {
+        "chunks before": impact.chunks_before,
+        "chunks after": impact.chunks_after,
+        "chunks removed": impact.chunks_removed,
+        "chunks added": impact.chunks_added,
+        "chunk embeddings removed": impact.chunk_embeddings_removed,
+        "chunk-to-asset edges removed": impact.contains_asset_edges_removed,
+    }
+
+
+def _set_chunk_preview(
+    state_key: str,
+    action: str,
+    before: GraphSnapshot,
+    after: GraphSnapshot,
+) -> None:
+    sequence = int(st.session_state.chunk_preview_sequence) + 1
+    st.session_state.chunk_preview_sequence = sequence
+    st.session_state[state_key] = {
+        "action": action,
+        "revision": int(st.session_state.snapshot_revision),
+        "candidate": after,
+        "impact": chunk_mutation_impact(before, after),
+        "confirmation_key": f"{state_key}_confirm_{sequence}",
+    }
+
+
+def _render_chunk_preview(state_key: str, commit_label: str) -> GraphSnapshot | None:
+    preview = st.session_state.get(state_key)
+    if not isinstance(preview, dict):
+        return None
+    if preview.get("revision") != int(st.session_state.snapshot_revision):
+        st.session_state[state_key] = None
+        st.warning("Chunk preview is stale. Generate a new preview.")
+        return None
+    candidate = preview.get("candidate")
+    impact = preview.get("impact")
+    confirmation_key = preview.get("confirmation_key")
+    if (
+        not isinstance(candidate, GraphSnapshot)
+        or not isinstance(impact, ChunkMutationImpact)
+        or not isinstance(confirmation_key, str)
+    ):
+        st.session_state[state_key] = None
+        return None
+    st.write(_chunk_impact_record(impact))
+    confirmed = st.checkbox(
+        "I understand that existing chunks and their embeddings will be removed.",
+        value=False,
+        key=confirmation_key,
+    )
+    if _action_button(commit_label, disabled=not confirmed, primary=True):
+        mark_snapshot_dirty(st.session_state, candidate)
+        st.session_state.chunk_regeneration_preview = None
+        st.session_state.chunk_deletion_preview = None
+        st.success(f"{preview['action']} applied to the session snapshot.")
+        return candidate
+    return None
+
+
 def _chunks(config: UiRuntimeConfig | None) -> None:
     st.subheader("Chunks & Embeddings")
     blocked = _blocked(config)
@@ -1245,6 +1326,66 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
             _record_error(
                 "Chunk generation failed safely; the snapshot was not changed."
             )
+    st.divider()
+    st.subheader("Destructive chunk maintenance")
+    st.warning(
+        "These actions change only the session snapshot. Publish a new dump and DB "
+        "only after reviewing the impact. Asset embeddings are preserved."
+    )
+    regenerate_col, delete_col = st.columns(2)
+    with regenerate_col:
+        if _action_button(
+            "Preview regenerate all chunks",
+            disabled=blocked or not snapshot.chunks,
+        ):
+            try:
+                assert config is not None
+                candidate = _run_visible_operation(
+                    "chunk_regeneration_preview",
+                    "Проверка файлов и регенерация preview… Подождите.",
+                    lambda: regenerate_all_chunks(
+                        snapshot, FilesystemMediaResolver(config.working_root)
+                    ),
+                )
+                _set_chunk_preview(
+                    "chunk_regeneration_preview",
+                    "Chunk regeneration",
+                    snapshot,
+                    candidate,
+                )
+                st.session_state.chunk_deletion_preview = None
+            except (ValueError, OSError, RuntimeError, ValidationError):
+                st.session_state.chunk_regeneration_preview = None
+                _record_error(
+                    "Chunk regeneration preview failed; the snapshot was not changed."
+                )
+    with delete_col:
+        if _action_button(
+            "Preview delete all chunks and chunk embeddings",
+            disabled=blocked or not snapshot.chunks,
+        ):
+            try:
+                candidate = delete_all_chunks_and_embeddings(snapshot)
+                _set_chunk_preview(
+                    "chunk_deletion_preview",
+                    "Chunk deletion",
+                    snapshot,
+                    candidate,
+                )
+                st.session_state.chunk_regeneration_preview = None
+            except (ValueError, RuntimeError, ValidationError):
+                st.session_state.chunk_deletion_preview = None
+                _record_error(
+                    "Chunk deletion preview failed; the snapshot was not changed."
+                )
+    applied = _render_chunk_preview(
+        "chunk_regeneration_preview", "Regenerate all chunks"
+    ) or _render_chunk_preview(
+        "chunk_deletion_preview", "Delete all chunks and chunk embeddings"
+    )
+    if applied is not None:
+        snapshot = applied
+
     st.dataframe([_node_record("Chunk", item) for item in snapshot.chunks])
     st.dataframe([_node_record("Asset", item) for item in snapshot.assets])
     st.dataframe(
@@ -1289,7 +1430,7 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
                         build_embeddings,
                         snapshot,
                         request,
-                        OllamaAdapter(LocalHttpTransport(base)),
+                        _ollama_adapter(base),
                     ),
                 )
                 if updated == snapshot:
@@ -1341,7 +1482,7 @@ def _chunks(config: UiRuntimeConfig | None) -> None:
                     image,
                     ModelAuthorization(allow=True, operation="vision_description"),
                     model=vision_model.strip(),
-                    vision=OllamaAdapter(LocalHttpTransport(base)),
+                    vision=_ollama_adapter(base),
                 ),
             )
             mark_snapshot_dirty(st.session_state, updated)
@@ -1585,7 +1726,7 @@ def _with_search(
         database = ladybug.Database(str(path / "database.lbug"))
         connection = ladybug.Connection(database)
         service = SearchService(
-            OllamaAdapter(LocalHttpTransport(base_url)),
+            _ollama_adapter(base_url),
             LadybugAnn(connection, manifest),
             manifest,
             st.session_state.snapshot,
@@ -1702,7 +1843,7 @@ def _chat(config: UiRuntimeConfig | None) -> None:
                 try:
                     database = ladybug.Database(str(path / "database.lbug"))
                     connection = ladybug.Connection(database)
-                    adapter = OllamaAdapter(LocalHttpTransport(base))
+                    adapter = _ollama_adapter(base)
                     search_request = SearchRequest(
                         question=question,
                         space=manifest.embedding_space,

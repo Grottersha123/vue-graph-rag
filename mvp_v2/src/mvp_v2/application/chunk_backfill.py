@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
+from dataclasses import dataclass
 from typing import Protocol
 
 from mvp_v2.application.chunking import (
@@ -98,13 +99,110 @@ def build_missing_chunks(
                 chunks_by_id[item.id] = item
             if item.id not in related_ids:
                 relations.append(
-                    graph.HasChunk.model_validate(
-                        {"from": version.id, "to": item.id}
-                    )
+                    graph.HasChunk.model_validate({"from": version.id, "to": item.id})
                 )
     updated = snapshot.model_copy(
         update={"chunks": tuple(chunks), "has_chunks": tuple(relations)}
     )
     if not validate_graph(updated).is_valid:
         raise ChunkBackfillError("chunk backfill would violate graph invariants")
+    return updated
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkMutationImpact:
+    chunks_before: int
+    chunks_after: int
+    chunks_removed: int
+    chunks_added: int
+    chunk_embeddings_removed: int
+    contains_asset_edges_removed: int
+
+
+def chunk_mutation_impact(
+    before: GraphSnapshot, after: GraphSnapshot
+) -> ChunkMutationImpact:
+    before_chunk_ids = {item.id for item in before.chunks}
+    after_chunk_ids = {item.id for item in after.chunks}
+    before_embedding_ids = {
+        relation.target_id for relation in before.has_embedding_chunks
+    }
+    after_embedding_ids = {
+        relation.target_id for relation in after.has_embedding_chunks
+    }
+    return ChunkMutationImpact(
+        chunks_before=len(before_chunk_ids),
+        chunks_after=len(after_chunk_ids),
+        chunks_removed=len(before_chunk_ids - after_chunk_ids),
+        chunks_added=len(after_chunk_ids - before_chunk_ids),
+        chunk_embeddings_removed=len(before_embedding_ids - after_embedding_ids),
+        contains_asset_edges_removed=max(
+            0, len(before.contains_assets) - len(after.contains_assets)
+        ),
+    )
+
+
+def delete_all_chunks_and_embeddings(snapshot: GraphSnapshot) -> GraphSnapshot:
+    """Remove the complete chunk subgraph without touching asset embeddings."""
+    chunk_embedding_ids = {
+        relation.target_id for relation in snapshot.has_embedding_chunks
+    }
+    updated = snapshot.model_copy(
+        update={
+            "chunks": (),
+            "embeddings": tuple(
+                item
+                for item in snapshot.embeddings
+                if item.id not in chunk_embedding_ids
+            ),
+            "has_chunks": (),
+            "contains_assets": (),
+            "has_embedding_chunks": (),
+        }
+    )
+    if not validate_graph(updated).is_valid:
+        raise ChunkBackfillError("chunk deletion would violate graph invariants")
+    return updated
+
+
+def regenerate_all_chunks(
+    snapshot: GraphSnapshot,
+    resolver: VerifiedSourceReader,
+    *,
+    policy: ChunkPolicy = DEFAULT_CHUNK_POLICY,
+) -> GraphSnapshot:
+    """Replace all chunks for every supported current Markdown version."""
+    current_version_ids = {
+        item.id for item in snapshot.document_versions if item.is_current
+    }
+    non_markdown_document_ids = {
+        item.id for item in snapshot.documents if item.content_format != "markdown"
+    }
+    unsupported_version_ids = {
+        relation.target_id
+        for relation in snapshot.has_versions
+        if relation.source_id in non_markdown_document_ids
+        and relation.target_id in current_version_ids
+    }
+    if any(
+        relation.source_id in unsupported_version_ids
+        for relation in snapshot.has_chunks
+    ):
+        raise ChunkBackfillError(
+            "current non-Markdown chunks cannot be regenerated from the stored source"
+        )
+    preserved_contains_assets = snapshot.contains_assets
+    cleared = delete_all_chunks_and_embeddings(snapshot)
+    regenerated = build_missing_chunks(cleared, resolver, policy=policy)
+    regenerated_chunk_ids = {item.id for item in regenerated.chunks}
+    restored_contains_assets = tuple(
+        relation
+        for relation in preserved_contains_assets
+        if relation.source_id in regenerated_chunk_ids
+    )
+    updated = regenerated.model_copy(
+        update={"contains_assets": restored_contains_assets}
+    )
+    if not validate_graph(updated).is_valid:
+        raise ChunkBackfillError("chunk regeneration would violate graph invariants")
     return updated

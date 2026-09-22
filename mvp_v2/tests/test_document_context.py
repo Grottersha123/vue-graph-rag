@@ -106,7 +106,12 @@ class _ScriptedAnn:
 class _EchoModel:
     def generate(self, *, prompt: str, model: str) -> str:
         tokens = " ".join(f"[{n}]" for n in range(1, MAX_EVIDENCE_ITEMS + 1))
-        return f"Answer {tokens}"
+        source_lines = "\n".join(
+            line.removeprefix("Required source line: ")
+            for line in prompt.splitlines()
+            if line.startswith("Required source line: ")
+        )
+        return f"Answer {tokens}\n<SOURCES>\n{source_lines}\n</SOURCES>"
 
 
 SPACE = EmbeddingSpaceIdentity(
