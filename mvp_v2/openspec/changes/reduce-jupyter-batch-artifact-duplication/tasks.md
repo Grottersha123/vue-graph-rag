@@ -9,11 +9,11 @@
 
 - [x] 2.1 Update sequential batch serialization to omit duplicated run metadata and `generation_calls[*].prompt`.
 - [x] 2.2 Update async batch serialization to emit the same compact result shape as sequential execution.
-- [ ] 2.3 Preserve complete `run.json` metadata and document that old runtime artifacts are not rewritten.
+- [x] 2.3 Preserve complete `run.json` metadata and document that old runtime artifacts are not rewritten.
 
 ## 3. Verification
 
-- [ ] 3.1 Run notebook compile and contract tests for both serialization branches.
+- [x] 3.1 Run notebook compile and contract tests for both serialization branches.
 - [ ] 3.2 Update and verify README/notebook artifact documentation.
 - [ ] 3.3 Run Ruff, strict mypy and full pytest through the `mvp_v2` environment.
 - [ ] 3.4 Check `git diff --check` and confirm no runtime data, `.env`, `.venv` or `*.lbdb` files changed.
