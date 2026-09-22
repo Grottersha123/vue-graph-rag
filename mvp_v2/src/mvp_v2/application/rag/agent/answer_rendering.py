@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 
-from mvp_v2.application.conversation.errors import ChatError
 from mvp_v2.application.dto.chat import Citation
 from mvp_v2.application.dto.retrieval import Evidence
+from mvp_v2.application.rag.agent.errors import ChatError
 
 _CITATION_TOKEN = re.compile(r"\[([^\[\]]*)\]")
 _CITATION_CONTENT = re.compile(r"[1-9]\d*(?:\s*,\s*[1-9]\d*)*", re.ASCII)

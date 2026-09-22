@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from mvp_v2.application.chat_export import (
-    ChatTurnProvenance,
-    render_chat_markdown,
-)
 from mvp_v2.application.dto.chat import ChatAnswer
 from mvp_v2.application.dto.retrieval import (
     EmbeddingSpaceIdentity,
@@ -19,6 +15,10 @@ from mvp_v2.application.manifests import (
     DatabaseManifest,
     TableCount,
     compute_database_build_id,
+)
+from mvp_v2.application.rag.agent.chat_export import (
+    ChatTurnProvenance,
+    render_chat_markdown,
 )
 from mvp_v2.domain.schema_registry import TABLE_NAMES
 

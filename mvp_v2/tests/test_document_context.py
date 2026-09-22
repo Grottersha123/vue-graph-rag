@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from mvp_v2.adapters.ladybug import LadybugAnn
-from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.dto.chat import ChatAnswer, Citation
 from mvp_v2.application.dto.retrieval import (
     ContextScope,
@@ -32,6 +31,7 @@ from mvp_v2.application.manifests import (
     TableCount,
     compute_database_build_id,
 )
+from mvp_v2.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.rag.retrieval.retrieval import SearchService, _hydrate
 from mvp_v2.domain import graph
 from mvp_v2.domain.graph import Document

@@ -10,17 +10,6 @@ from pathlib import Path
 import pytest
 
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
-from mvp_v2.application.chat import NOT_ENOUGH_EVIDENCE, ChatError, ChatService
-from mvp_v2.application.conversation.conf import (
-    DEFAULT_MCP_PROMPT_TEMPLATE,
-    DEFAULT_PROMPT_TEMPLATE,
-    INSUFFICIENT_EVIDENCE_TOKEN,
-    MCP_PROMPT_TEMPLATES,
-    PROMPT_TEMPLATES,
-    render_mcp_answer_prompt,
-    render_mcp_cypher_prompt,
-)
-from mvp_v2.application.conversation.rendering import referenced_numbers
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
@@ -37,6 +26,21 @@ from mvp_v2.application.graph_snapshot_operations.relations import (
 )
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.json_encoding import canonical_json_bytes
+from mvp_v2.application.rag.agent.answer_rendering import referenced_numbers
+from mvp_v2.application.rag.agent.chat import (
+    NOT_ENOUGH_EVIDENCE,
+    ChatError,
+    ChatService,
+)
+from mvp_v2.application.rag.agent.prompts import (
+    DEFAULT_MCP_PROMPT_TEMPLATE,
+    DEFAULT_PROMPT_TEMPLATE,
+    INSUFFICIENT_EVIDENCE_TOKEN,
+    MCP_PROMPT_TEMPLATES,
+    PROMPT_TEMPLATES,
+    render_mcp_answer_prompt,
+    render_mcp_cypher_prompt,
+)
 from mvp_v2.domain import graph
 from mvp_v2.domain.schema_registry import (
     NODE_SPECS,

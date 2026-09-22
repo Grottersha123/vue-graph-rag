@@ -6,7 +6,7 @@
 - [x] 1.2 Переместить GraphSnapshot use cases в `graph_snapshot_operations/`; проверить, что содержимое функций не изменилось через focused diff и import check.
 - [x] 1.3 Переместить chunking/model preparation модули в `rag/preparation/`; проверить deterministic chunk tests и model operation tests.
 - [x] 1.4 Переместить projection/retrieval модули в `rag/retrieval/`; проверить retrieval and projection tests.
-- [ ] 1.5 Перенести `chat.py` и `chat_export.py` в `rag/agent/`, объединить `conversation/conf.py` и `prompting.py` в `prompts.py`, перенести rendering в `answer_rendering.py` и errors в `errors.py`; проверить prompt/citation tests.
+- [x] 1.5 Перенести `chat.py` и `chat_export.py` в `rag/agent/`, объединить `conversation/conf.py` и `prompting.py` в `prompts.py`, перенести rendering в `answer_rendering.py` и errors в `errors.py`; проверить prompt/citation tests.
 - [ ] 1.6 Перенести `manifests.py`, publication, validation и `dump_restamp.py` в `dump_lifecycle/`; удалить `application/services/` и проверить dump tests.
 
 ## 2. Import and documentation migration

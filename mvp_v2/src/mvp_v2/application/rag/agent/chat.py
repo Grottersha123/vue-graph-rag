@@ -2,22 +2,20 @@ from __future__ import annotations
 
 from typing import Final, Protocol
 
-from mvp_v2.application.conversation.conf import (
-    DEFAULT_PROMPT_TEMPLATE,
-    INSUFFICIENT_EVIDENCE_TOKEN,
-    PromptTemplate,
-)
-from mvp_v2.application.conversation.errors import ChatError
-from mvp_v2.application.conversation.prompting import (
-    build_chat_prompt,
-    build_citation_retry_prompt,
-)
-from mvp_v2.application.conversation.rendering import (
+from mvp_v2.application.dto.chat import ChatAnswer, ChatRequest, Citation
+from mvp_v2.application.dto.retrieval import Evidence, SearchRequest
+from mvp_v2.application.rag.agent.answer_rendering import (
     referenced_numbers,
     render_answer,
 )
-from mvp_v2.application.dto.chat import ChatAnswer, ChatRequest, Citation
-from mvp_v2.application.dto.retrieval import Evidence, SearchRequest
+from mvp_v2.application.rag.agent.errors import ChatError
+from mvp_v2.application.rag.agent.prompts import (
+    DEFAULT_PROMPT_TEMPLATE,
+    INSUFFICIENT_EVIDENCE_TOKEN,
+    PromptTemplate,
+    build_chat_prompt,
+    build_citation_retry_prompt,
+)
 from mvp_v2.ports.models import TextGenerationModel
 
 NOT_ENOUGH_EVIDENCE: Final = (

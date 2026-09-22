@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from mvp_v2.application.conversation.rendering import render_citation_details
 from mvp_v2.application.dto.chat import ChatAnswer
 from mvp_v2.application.manifests import DatabaseManifest
+from mvp_v2.application.rag.agent.answer_rendering import render_citation_details
 
 
 class ChatTurnProvenance(BaseModel):

@@ -20,9 +20,6 @@ from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_dump
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
-from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
-from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
-from mvp_v2.application.conversation.rendering import render_citation_details
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
     DeletionCommand,
@@ -63,6 +60,12 @@ from mvp_v2.application.ingestion_contracts import (
     SourceKind,
 )
 from mvp_v2.application.manifests import DatabaseManifest, DumpManifest
+from mvp_v2.application.rag.agent.answer_rendering import render_citation_details
+from mvp_v2.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
+from mvp_v2.application.rag.agent.chat_export import (
+    ChatTurnProvenance,
+    render_chat_markdown,
+)
 from mvp_v2.application.rag.preparation.chunk_backfill import (
     ChunkMutationImpact,
     build_missing_chunks,

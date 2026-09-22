@@ -23,10 +23,12 @@ mvp_v2/src/mvp_v2/
       reference_data.py       minimal SourceType/Status bootstrap
       relations.py            typed GraphSnapshot relation operations
       title_backfill.py       deterministic title backfill from chunks
-    conversation/            versioned support prompts and trusted citation rendering
-      conf.py                 immutable Chat/MCP prompt profiles and pure templates
-      prompting.py            evidence limits and prompt assembly
-      rendering.py            strict citations and human-readable provenance
+    rag/agent/                chat, prompts, citations, and export workflow
+      chat.py                 ChatService and evidence-grounded answers
+      chat_export.py          Markdown chat export and provenance
+      prompts.py              Chat/MCP templates and prompt assembly
+      answer_rendering.py     strict citations and human-readable provenance
+      errors.py               chat and generation contract errors
     manifests.py             current-only dump and database manifests
     json_encoding.py         canonical JSON bytes for signed artifacts
     dto/                     embedding/search/deletion DTOs
@@ -84,7 +86,7 @@ release and there is no cloud fallback.
 
 ## Consolidated ingestion/model delivery
 
-- `application/reference_data.py`: explicit minimal current-schema SourceType/Status bootstrap.
+- `application/graph_snapshot_operations/reference_data.py`: explicit minimal current-schema SourceType/Status bootstrap.
 - `application/ingestion_contracts.py`: preview/commit and explicit model authorization DTOs.
 - `application/graph_snapshot_operations/ingestion.py`: ingestion preview/commit and immutable version transitions.
 - `application/rag/preparation/`: deterministic chunks and explicit model preparation.
@@ -97,7 +99,7 @@ release and there is no cloud fallback.
 - `application/rag/retrieval/projection.py`: deterministic current-active one-space database projection.
 - `adapters/ladybug.py`: lazy Ladybug build and fixed-index ANN adapter (`LOAD`, never install).
 - `application/rag/retrieval/retrieval.py`: authorized local embedding search and typed citation hydration.
-- `application/deletion.py`: pure preview/apply cascade and version promotion policy.
+- `application/graph_snapshot_operations/deletion.py`: pure preview/apply cascade and version promotion policy.
 - `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
 - `application/services/publication.py`: graph, media, and version-file publication gate.
 - `presentation/controller.py`: upload limits/cleanup, exact snapshot/dump binding, and UI deletion adapters.
