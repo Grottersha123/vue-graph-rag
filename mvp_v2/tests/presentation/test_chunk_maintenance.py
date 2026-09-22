@@ -7,7 +7,9 @@ from unittest.mock import Mock
 import pytest
 
 import mvp_v2.presentation.app as app
-from mvp_v2.application.chunk_backfill import delete_all_chunks_and_embeddings
+from mvp_v2.application.rag.preparation.chunk_backfill import (
+    delete_all_chunks_and_embeddings,
+)
 from mvp_v2.domain.snapshot import GraphSnapshot
 from tests.factories import build_valid_snapshot
 

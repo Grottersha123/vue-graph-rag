@@ -14,8 +14,9 @@ mvp_v2/src/mvp_v2/
   graph_fields.json          user-editable optional node-field declarations
     invariant_indexes.py     one-pass indexes for graph validation
     invariants.py            cross-row graph validation
-    chunking.py              deterministic text chunk policy
   application/               use cases and non-persisted commands/results
+    graph_snapshot_operations/ GraphSnapshot use cases and immutable version transitions
+      ingestion.py            source ingestion preview/commit workflow
     conversation/            versioned support prompts and trusted citation rendering
       conf.py                 immutable Chat/MCP prompt profiles and pure templates
       prompting.py            evidence limits and prompt assembly
@@ -23,6 +24,10 @@ mvp_v2/src/mvp_v2/
     manifests.py             current-only dump and database manifests
     json_encoding.py         canonical JSON bytes for signed artifacts
     dto/                     embedding/search/deletion DTOs
+    rag/preparation/         deterministic chunks and explicit model preparation
+      chunking.py            deterministic text chunk policy
+      chunk_backfill.py      verified-source chunk preparation and maintenance
+      model_operations.py    authorized vision and embedding operations
     services/                orchestration by use case
   ports/                     narrow Protocols required by application services
   adapters/
@@ -72,8 +77,9 @@ release and there is no cloud fallback.
 
 - `application/reference_data.py`: explicit minimal current-schema SourceType/Status bootstrap.
 - `application/ingestion_contracts.py`: preview/commit and explicit model authorization DTOs.
-- `application/chunking.py`, `application/ingestion.py`: deterministic chunks and immutable version transitions.
-- `application/model_operations.py`: local vision updates and missing/all embedding policy.
+- `application/graph_snapshot_operations/ingestion.py`: ingestion preview/commit and immutable version transitions.
+- `application/rag/preparation/`: deterministic chunks and explicit model preparation.
+- `application/rag/preparation/model_operations.py`: local vision updates and missing/all embedding policy.
 - `ports/ingestion.py`, `ports/models.py`: narrow input, file, vision, embedding, and later-chat generation ports.
 - `adapters/ingestion.py`: UTF-8/HTML/PDF CLI/image extraction.
 - `adapters/filesystem/runtime_store.py`: confined temp-file/rename writes.

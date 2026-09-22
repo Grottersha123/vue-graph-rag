@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
-from mvp_v2.application.chunk_backfill import (
+from mvp_v2.application.rag.preparation.chunk_backfill import (
     ChunkBackfillError,
     build_missing_chunks,
     chunk_mutation_impact,

@@ -4,7 +4,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Protocol
 
-from mvp_v2.application.chunking import (
+from mvp_v2.application.rag.preparation.chunking import (
     DEFAULT_CHUNK_POLICY,
     ChunkPolicy,
     make_chunks,

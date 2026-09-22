@@ -5,16 +5,16 @@ import re
 from datetime import datetime
 from pathlib import PurePosixPath
 
-from mvp_v2.application.chunking import (
-    DEFAULT_CHUNK_POLICY,
-    ChunkPolicy,
-    make_chunks,
-    split_text,
-)
 from mvp_v2.application.ingestion_contracts import (
     CommitResult,
     IngestionPreview,
     IngestionRequest,
+)
+from mvp_v2.application.rag.preparation.chunking import (
+    DEFAULT_CHUNK_POLICY,
+    ChunkPolicy,
+    make_chunks,
+    split_text,
 )
 from mvp_v2.domain import graph
 from mvp_v2.domain.base import stable_id

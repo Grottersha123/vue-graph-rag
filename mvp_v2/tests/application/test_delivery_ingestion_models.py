@@ -15,12 +15,11 @@ from mvp_v2.adapters.filesystem.runtime_store import (
 )
 from mvp_v2.adapters.ingestion import LocalInputExtractor
 from mvp_v2.adapters.ollama import OllamaAdapter
-from mvp_v2.application.chunking import ChunkPolicy, split_text
 from mvp_v2.application.document_editing import (
     DocumentMetadataUpdate,
     update_document_metadata,
 )
-from mvp_v2.application.ingestion import (
+from mvp_v2.application.graph_snapshot_operations.ingestion import (
     IngestionError,
     IngestionService,
     _markdown_h1,
@@ -34,7 +33,8 @@ from mvp_v2.application.ingestion_contracts import (
     ModelIdentity,
     SourceKind,
 )
-from mvp_v2.application.model_operations import (
+from mvp_v2.application.rag.preparation.chunking import ChunkPolicy, split_text
+from mvp_v2.application.rag.preparation.model_operations import (
     ModelOperationError,
     build_embeddings,
     describe_asset,

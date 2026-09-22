@@ -32,7 +32,7 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     DeletionResult,
 )
-from mvp_v2.application.ingestion import IngestionService
+from mvp_v2.application.graph_snapshot_operations.ingestion import IngestionService
 from mvp_v2.application.ingestion_contracts import (
     IngestionPreview,
     IngestionRequest,
