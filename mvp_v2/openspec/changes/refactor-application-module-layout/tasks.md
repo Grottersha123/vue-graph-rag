@@ -12,7 +12,7 @@
 ## 2. Import and documentation migration
 
 - [x] 2.1 Обновить импорты в `ports/`, `adapters/`, `presentation/`, bootstrap и notebooks; проверить импорт всего `mvp_v2` без старых module paths.
-- [ ] 2.2 Обновить импорты и fixtures в tests; проверить отсутствие ссылок на удалённые `application.services` и `application.conversation` paths.
+- [x] 2.2 Обновить импорты и fixtures в tests; проверить отсутствие ссылок на удалённые `application.services` и `application.conversation` paths.
 - [ ] 2.3 Обновить `docs/module-map.md` и связанные OpenSpec/UI references; проверить соответствие документации фактическому дереву.
 
 ## 3. Verification
