@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from mvp_v2.adapters.filesystem.media import FilesystemMediaDeleter
-from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.dto.deletion import DeletionCommand, GraphNodeRef
+from mvp_v2.application.graph_snapshot_operations.deletion import preview_deletion
 from mvp_v2.bootstrap.ui import UiRuntimeConfig
 from mvp_v2.ports.media import MediaDeletionError, MediaDeletionTarget
 from mvp_v2.presentation.controller import confirm_file_deletion

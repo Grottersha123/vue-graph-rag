@@ -30,9 +30,13 @@ from mvp_v2.application.dto.retrieval import (
     SubjectKind,
     SubjectRef,
 )
+from mvp_v2.application.graph_snapshot_operations.relations import (
+    RelationError,
+    RelationKind,
+    RelationService,
+)
 from mvp_v2.application.ingestion_contracts import IngestionRequest, ModelAuthorization
 from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.application.relations import RelationError, RelationKind, RelationService
 from mvp_v2.domain import graph
 from mvp_v2.domain.schema_registry import (
     NODE_SPECS,

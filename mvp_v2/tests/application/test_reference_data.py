@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mvp_v2.application.reference_data import (
+from mvp_v2.application.graph_snapshot_operations.reference_data import (
     DEFAULT_SOURCE_TYPE,
     DEFAULT_STATUS,
     initialize_reference_data,

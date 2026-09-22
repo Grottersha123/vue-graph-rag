@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from mvp_v2.adapters.ladybug import LadybugAnn
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
-from mvp_v2.application.document_view import build_document_view
 from mvp_v2.application.dto.chat import ChatAnswer, Citation
 from mvp_v2.application.dto.retrieval import (
     ContextScope,
@@ -20,6 +19,12 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
+from mvp_v2.application.graph_snapshot_operations.document_view import (
+    build_document_view,
+)
+from mvp_v2.application.graph_snapshot_operations.title_backfill import (
+    fill_missing_document_titles,
+)
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
 from mvp_v2.application.manifests import (
     DATABASE_FORMAT,
@@ -28,7 +33,6 @@ from mvp_v2.application.manifests import (
     compute_database_build_id,
 )
 from mvp_v2.application.retrieval import SearchService, _hydrate
-from mvp_v2.application.title_backfill import fill_missing_document_titles
 from mvp_v2.domain import graph
 from mvp_v2.domain.graph import Document
 from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES

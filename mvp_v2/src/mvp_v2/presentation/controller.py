@@ -20,7 +20,6 @@ from mvp_v2.adapters.filesystem.media import (
 from mvp_v2.adapters.filesystem.runtime_store import ConfinedRuntimeFileStore
 from mvp_v2.adapters.ingestion import LocalHttpUrlFetcher, LocalInputExtractor
 from mvp_v2.adapters.ladybug import build_database
-from mvp_v2.application.deletion import apply_deletion
 from mvp_v2.application.deletion_orchestration import (
     DeletionService,
     FileDeletionOutcome,
@@ -32,6 +31,7 @@ from mvp_v2.application.dto.deletion import (
     DeletionImpact,
     DeletionResult,
 )
+from mvp_v2.application.graph_snapshot_operations.deletion import apply_deletion
 from mvp_v2.application.graph_snapshot_operations.ingestion import IngestionService
 from mvp_v2.application.ingestion_contracts import (
     IngestionPreview,

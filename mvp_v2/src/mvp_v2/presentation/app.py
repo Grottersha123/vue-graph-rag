@@ -23,16 +23,6 @@ from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
 from mvp_v2.application.conversation.rendering import render_citation_details
-from mvp_v2.application.deletion import preview_deletion
-from mvp_v2.application.document_editing import (
-    DocumentMetadataUpdate,
-    update_document_metadata,
-)
-from mvp_v2.application.document_view import (
-    DocumentSummary,
-    build_document_summaries,
-    build_document_view,
-)
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.deletion import (
     DeletionCommand,
@@ -45,6 +35,26 @@ from mvp_v2.application.dto.retrieval import (
     SearchRequest,
 )
 from mvp_v2.application.dump_restamp import apply_dump_restamp, plan_dump_restamp
+from mvp_v2.application.graph_snapshot_operations.deletion import preview_deletion
+from mvp_v2.application.graph_snapshot_operations.document_editing import (
+    DocumentMetadataUpdate,
+    update_document_metadata,
+)
+from mvp_v2.application.graph_snapshot_operations.document_view import (
+    DocumentSummary,
+    build_document_summaries,
+    build_document_view,
+)
+from mvp_v2.application.graph_snapshot_operations.reference_data import (
+    initialize_reference_data,
+)
+from mvp_v2.application.graph_snapshot_operations.relations import (
+    RelationKind,
+    RelationService,
+)
+from mvp_v2.application.graph_snapshot_operations.title_backfill import (
+    fill_missing_document_titles,
+)
 from mvp_v2.application.ingestion_contracts import (
     EmbeddingRequest,
     IngestionRequest,
@@ -64,11 +74,8 @@ from mvp_v2.application.rag.preparation.model_operations import (
     build_embeddings,
     describe_asset,
 )
-from mvp_v2.application.reference_data import initialize_reference_data
-from mvp_v2.application.relations import RelationKind, RelationService
 from mvp_v2.application.retrieval import SearchService
 from mvp_v2.application.services.publication import SnapshotPublicationService
-from mvp_v2.application.title_backfill import fill_missing_document_titles
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
 from mvp_v2.domain.graph import Asset, Document
 from mvp_v2.domain.schema_registry import NODE_SPECS

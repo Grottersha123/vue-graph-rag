@@ -15,7 +15,7 @@ from mvp_v2.adapters.filesystem.runtime_store import (
 )
 from mvp_v2.adapters.ingestion import LocalInputExtractor
 from mvp_v2.adapters.ollama import OllamaAdapter
-from mvp_v2.application.document_editing import (
+from mvp_v2.application.graph_snapshot_operations.document_editing import (
     DocumentMetadataUpdate,
     update_document_metadata,
 )

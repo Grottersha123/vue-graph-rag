@@ -12,7 +12,6 @@ from mvp_v2.adapters.ladybug import (
     LadybugBuildError,
     load_verified_dump,
 )
-from mvp_v2.application.deletion import apply_deletion, preview_deletion
 from mvp_v2.application.deletion_orchestration import DeletionService
 from mvp_v2.application.dto.deletion import (
     DatabaseIdentity,
@@ -27,6 +26,10 @@ from mvp_v2.application.dto.retrieval import (
     SubjectRef,
     VectorHit,
     VectorQuery,
+)
+from mvp_v2.application.graph_snapshot_operations.deletion import (
+    apply_deletion,
+    preview_deletion,
 )
 from mvp_v2.application.ingestion_contracts import ModelAuthorization
 from mvp_v2.application.json_encoding import canonical_json_bytes

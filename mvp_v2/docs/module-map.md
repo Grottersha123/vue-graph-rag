@@ -16,7 +16,13 @@ mvp_v2/src/mvp_v2/
     invariants.py            cross-row graph validation
   application/               use cases and non-persisted commands/results
     graph_snapshot_operations/ GraphSnapshot use cases and immutable version transitions
+      deletion.py             pure deletion planning and snapshot mutation
+      document_editing.py     document metadata and title updates
+      document_view.py        document summaries and current-version views
       ingestion.py            source ingestion preview/commit workflow
+      reference_data.py       minimal SourceType/Status bootstrap
+      relations.py            typed GraphSnapshot relation operations
+      title_backfill.py       deterministic title backfill from chunks
     conversation/            versioned support prompts and trusted citation rendering
       conf.py                 immutable Chat/MCP prompt profiles and pure templates
       prompting.py            evidence limits and prompt assembly
