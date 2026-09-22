@@ -140,3 +140,7 @@ class SearchRequest(ContractModel):
     purposes: tuple[EmbeddingPurposeValue, ...]
     limit: Annotated[int, Field(strict=True, ge=1, le=100)]
     authorization: ModelAuthorization
+    minimum_score: Annotated[
+        float,
+        Field(strict=True, ge=-1.0, le=1.0, allow_inf_nan=False),
+    ] = 0.55

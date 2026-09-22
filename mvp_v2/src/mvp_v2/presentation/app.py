@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import sys
@@ -21,13 +22,6 @@ from mvp_v2.adapters.ladybug import LadybugAnn, build_database, load_verified_du
 from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.chat_export import ChatTurnProvenance, render_chat_markdown
-from mvp_v2.application.chunk_backfill import (
-    ChunkMutationImpact,
-    build_missing_chunks,
-    chunk_mutation_impact,
-    delete_all_chunks_and_embeddings,
-    regenerate_all_chunks,
-)
 from mvp_v2.application.conversation.rendering import render_citation_details
 from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.document_editing import (
@@ -59,7 +53,17 @@ from mvp_v2.application.ingestion_contracts import (
     SourceKind,
 )
 from mvp_v2.application.manifests import DatabaseManifest, DumpManifest
-from mvp_v2.application.model_operations import build_embeddings, describe_asset
+from mvp_v2.application.rag.preparation.chunk_backfill import (
+    ChunkMutationImpact,
+    build_missing_chunks,
+    chunk_mutation_impact,
+    delete_all_chunks_and_embeddings,
+    regenerate_all_chunks,
+)
+from mvp_v2.application.rag.preparation.model_operations import (
+    build_embeddings,
+    describe_asset,
+)
 from mvp_v2.application.reference_data import initialize_reference_data
 from mvp_v2.application.relations import RelationKind, RelationService
 from mvp_v2.application.retrieval import SearchService
@@ -129,6 +133,15 @@ def _environment_dimension() -> int:
     except ValueError:
         return 768
     return value if value > 0 else 768
+
+
+def _environment_similarity_score() -> float:
+    raw = os.environ.get("MVP_V2_MINIMUM_SIMILARITY_SCORE", "0.55")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.55
+    return value if math.isfinite(value) and -1.0 <= value <= 1.0 else 0.55
 
 
 def _asset_label(asset: Asset) -> str:
@@ -1778,6 +1791,7 @@ def _search(config: UiRuntimeConfig | None) -> None:
                 ),
                 limit=limit,
                 authorization=ModelAuthorization(allow=True, operation="embedding"),
+                minimum_score=_environment_similarity_score(),
             )
             st.session_state.search_evidence = _run_visible_operation(
                 "search",
@@ -1856,6 +1870,7 @@ def _chat(config: UiRuntimeConfig | None) -> None:
                         authorization=ModelAuthorization(
                             allow=True, operation="embedding"
                         ),
+                        minimum_score=_environment_similarity_score(),
                     )
                     service = ChatService(
                         SearchService(

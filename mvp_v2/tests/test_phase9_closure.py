@@ -47,6 +47,7 @@ from mvp_v2.presentation.app import (
     _current_upload_preview,
     _custom_property_names,
     _deletion_block_reason,
+    _environment_similarity_score,
     _invalidate_upload_preview,
     _node_record,
     _preferred_option_index,
@@ -126,10 +127,7 @@ def evidence() -> Evidence:
     )
 
 
-REFERENCE = (
-    "документе «Title» (ID document), версия 1, чанк 1 из 1, "
-    "фактическая позиция 0, источник documents/a.md"
-)
+REFERENCE = "«Title», чанк 1"
 
 
 def rendered_response(text: str) -> str:
@@ -153,6 +151,20 @@ def request(*, generation: bool = True) -> ChatRequest:
         model_version="v1",
         authorization=ModelAuthorization(allow=generation, operation="generation"),
     )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (("0.6", 0.6), ("bad", 0.55), ("nan", 0.55), ("1.1", 0.55)),
+)
+def test_environment_similarity_score_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+    expected: float,
+) -> None:
+    monkeypatch.setenv("MVP_V2_MINIMUM_SIMILARITY_SCORE", raw)
+
+    assert _environment_similarity_score() == expected
 
 
 def test_chat_denied_with_evidence_makes_zero_generation_calls() -> None:
@@ -205,7 +217,8 @@ def test_chat_renders_human_source_reference_and_keeps_typed_citation() -> None:
     assert answer.answer == rendered_response("Bound answer [1]")
     assert answer.citations[0].number == 1
     assert answer.citations[0].evidence_id == answer.evidence[0].embedding_id
-    assert "caring and patient VEUnicorn student support specialist" in model.calls[0]
+    assert "concise VEUnicorn instruction assistant" in model.calls[0]
+    assert "Do not add greetings" in model.calls[0]
     assert "Answer in Russian" in model.calls[0]
     assert "present it as a practical instruction" in model.calls[0]
     assert "User request: Question?" in model.calls[0]

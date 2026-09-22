@@ -170,8 +170,7 @@ def test_export_renders_answer_citations_and_missing_provenance() -> None:
     assert "- Database: not recorded" in text
     assert "- Source dump: not recorded" in text
     assert "- [1]" not in text
-    assert (
-        "- Документ «Гайд по телеграму» (ID document-1), версия 2, "
-        "чанк 3 из 12, фактическая позиция 2, источник file://docs/a.md; "
-        "score=0.910000; context=chunk_window; evidence ID=embedding-1" in text
-    )
+    assert "- file://docs/a.md, чанк 3" in text
+    assert "Гайд по телеграму" not in text
+    assert "score=" not in text
+    assert "evidence ID=" not in text

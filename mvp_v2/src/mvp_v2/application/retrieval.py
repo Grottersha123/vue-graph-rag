@@ -75,6 +75,8 @@ class SearchService:
         evidence: list[Evidence] = []
         merged_texts: dict[str, list[str]] = {}
         for hit in hits:
+            if hit.score < request.minimum_score:
+                continue
             item = _hydrate(self._snapshot, hit)
             existing = next(
                 (e for e in evidence if e.version_id == item.version_id), None

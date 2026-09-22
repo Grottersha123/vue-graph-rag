@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from mvp_v2.adapters.ladybug import LadybugAnn
 from mvp_v2.application.chat import MAX_EVIDENCE_ITEMS, ChatService
 from mvp_v2.application.document_view import build_document_view
 from mvp_v2.application.dto.chat import ChatAnswer, Citation
@@ -218,6 +219,68 @@ def _multi_version_snapshot() -> GraphSnapshot:
     )
 
 
+class _LadybugQueryResult:
+    def __init__(self, rows: list[list[object]]) -> None:
+        self._rows = iter(rows)
+        self._next: list[object] | None = None
+
+    def has_next(self) -> bool:
+        try:
+            self._next = next(self._rows)
+        except StopIteration:
+            return False
+        return True
+
+    def get_next(self) -> list[object]:
+        assert self._next is not None
+        row = self._next
+        self._next = None
+        return row
+
+    def close(self) -> None:
+        return None
+
+
+class _LadybugConnection:
+    def execute(
+        self,
+        query: str,
+        parameters: dict[str, object] | None = None,
+    ) -> _LadybugQueryResult:
+        del parameters
+        if query == "LOAD vector":
+            return _LadybugQueryResult([])
+        if query.startswith("CALL QUERY_VECTOR_INDEX"):
+            return _LadybugQueryResult([["embedding-chunk", 0.2]])
+        if "HAS_EMBEDDING_CHUNK" in query:
+            return _LadybugQueryResult([["chunk"]])
+        raise AssertionError(f"unexpected query: {query}")
+
+
+def test_ladybug_adapter_and_search_service_share_current_dto_types() -> None:
+    service = SearchService(
+        _EmbedModel((1.0, 2.0)),
+        LadybugAnn(_LadybugConnection(), _manifest()),
+        _manifest(),
+        build_valid_snapshot(),
+    )
+
+    evidence = service.search(
+        SearchRequest(
+            question="question",
+            space=_identity(),
+            purposes=(EmbeddingPurpose.CHUNK_RETRIEVAL,),
+            limit=1,
+            authorization=ModelAuthorization(allow=True, operation="embedding"),
+        )
+    )
+
+    assert len(evidence) == 1
+    assert isinstance(evidence[0].subject, SubjectRef)
+    assert evidence[0].subject.id == "chunk"
+    assert evidence[0].score == pytest.approx(0.8)
+
+
 def test_duplicate_heavy_topk_refills_distinct_versions() -> None:
     ann = _ScriptedAnn(
         (
@@ -248,6 +311,42 @@ def test_duplicate_heavy_topk_refills_distinct_versions() -> None:
         "version-c",
     ]
     assert evidence[0].text == "hello"
+
+
+def test_search_filters_hits_below_minimum_similarity_score() -> None:
+    ann = _ScriptedAnn(
+        (
+            _hit("chunk", 0.55),
+            _hit("chunk-b", 0.549999),
+        )
+    )
+    service = SearchService(
+        _EmbedModel((1.0, 2.0)), ann, _manifest(), _multi_version_snapshot()
+    )
+
+    evidence = service.search(
+        SearchRequest(
+            question="question",
+            space=_identity(),
+            purposes=(EmbeddingPurpose.CHUNK_RETRIEVAL,),
+            limit=2,
+            authorization=ModelAuthorization(allow=True, operation="embedding"),
+        )
+    )
+
+    assert [(item.version_id, item.score) for item in evidence] == [("version", 0.55)]
+
+
+def test_search_request_validates_minimum_similarity_score() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(
+            question="question",
+            space=_identity(),
+            purposes=(EmbeddingPurpose.CHUNK_RETRIEVAL,),
+            limit=2,
+            authorization=ModelAuthorization(allow=True, operation="embedding"),
+            minimum_score=1.01,
+        )
 
 
 def test_search_limit_100_requests_at_least_100_ann_candidates() -> None:

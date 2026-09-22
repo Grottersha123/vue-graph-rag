@@ -44,19 +44,10 @@ def render_answer(answer: str, evidence: tuple[Evidence, ...]) -> str:
 
 
 def render_citation_details(citation: Citation) -> str:
-    source_ref = citation.source_url.strip() or citation.local_path
-    reference = _render_reference(
+    return _render_reference(
         document_title=citation.document_title,
-        document_id=citation.document_id,
-        version=citation.version,
+        source_url=citation.source_url,
         position=citation.matched_chunk_position,
-        chunk_count=citation.document_chunk_count,
-        source_ref=source_ref,
-    )
-    return (
-        f"Документ {reference}; score={citation.score:.6f}; "
-        f"context={_one_line(citation.context_scope)}; "
-        f"evidence ID={_one_line(citation.evidence_id)}"
     )
 
 
@@ -72,33 +63,22 @@ def _numbers_in_token(token: str) -> tuple[int, ...]:
 
 
 def _render_evidence_reference(evidence: Evidence) -> str:
-    source_ref = evidence.source_url.strip() or evidence.local_path
-    return "документе " + _render_reference(
+    return _render_reference(
         document_title=evidence.document_title,
-        document_id=evidence.document_id,
-        version=evidence.version,
+        source_url=evidence.source_url,
         position=evidence.matched_chunk_position,
-        chunk_count=evidence.document_chunk_count,
-        source_ref=source_ref,
     )
 
 
 def _render_reference(
     *,
     document_title: str,
-    document_id: str,
-    version: int,
+    source_url: str,
     position: int | None,
-    chunk_count: int,
-    source_ref: str,
 ) -> str:
+    source = _one_line(source_url) or f"«{_one_line(document_title)}»"
     ordinal = "не указан" if position is None else str(position + 1)
-    stored_position = "не указана" if position is None else str(position)
-    return (
-        f"«{_one_line(document_title)}» (ID {_one_line(document_id)}), "
-        f"версия {version}, чанк {ordinal} из {chunk_count}, "
-        f"фактическая позиция {stored_position}, источник {_one_line(source_ref)}"
-    )
+    return f"{source}, чанк {ordinal}"
 
 
 def _one_line(value: str) -> str:
