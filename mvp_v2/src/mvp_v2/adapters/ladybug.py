@@ -28,7 +28,7 @@ from mvp_v2.application.manifests import (
     TableCount,
     compute_database_build_id,
 )
-from mvp_v2.application.projection import active_projection
+from mvp_v2.application.rag.retrieval.projection import active_projection
 from mvp_v2.domain.invariants import validate_graph
 from mvp_v2.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,

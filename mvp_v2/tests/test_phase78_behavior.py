@@ -42,8 +42,8 @@ from mvp_v2.application.manifests import (
     compute_database_build_id,
     compute_dump_run_id,
 )
-from mvp_v2.application.projection import active_projection
-from mvp_v2.application.retrieval import SearchError, SearchService
+from mvp_v2.application.rag.retrieval.projection import active_projection
+from mvp_v2.application.rag.retrieval.retrieval import SearchError, SearchService
 from mvp_v2.domain import graph
 from mvp_v2.domain.invariants import validate_graph
 from mvp_v2.domain.schema_registry import (

@@ -32,7 +32,7 @@ from mvp_v2.application.manifests import (
     TableCount,
     compute_database_build_id,
 )
-from mvp_v2.application.retrieval import SearchService, _hydrate
+from mvp_v2.application.rag.retrieval.retrieval import SearchService, _hydrate
 from mvp_v2.domain import graph
 from mvp_v2.domain.graph import Document
 from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES

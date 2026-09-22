@@ -34,6 +34,9 @@ mvp_v2/src/mvp_v2/
       chunking.py            deterministic text chunk policy
       chunk_backfill.py      verified-source chunk preparation and maintenance
       model_operations.py    authorized vision and embedding operations
+    rag/retrieval/           active projection and evidence retrieval
+      projection.py          deterministic current-active graph projection
+      retrieval.py           authorized local embedding search and citations
     services/                orchestration by use case
   ports/                     narrow Protocols required by application services
   adapters/
@@ -91,9 +94,9 @@ release and there is no cloud fallback.
 - `adapters/filesystem/runtime_store.py`: confined temp-file/rename writes.
 - `adapters/ollama.py`: bounded local-only HTTP and response parsing.
 
-- `application/projection.py`: deterministic current-active one-space database projection.
+- `application/rag/retrieval/projection.py`: deterministic current-active one-space database projection.
 - `adapters/ladybug.py`: lazy Ladybug build and fixed-index ANN adapter (`LOAD`, never install).
-- `application/retrieval.py`: authorized local embedding search and typed citation hydration.
+- `application/rag/retrieval/retrieval.py`: authorized local embedding search and typed citation hydration.
 - `application/deletion.py`: pure preview/apply cascade and version promotion policy.
 - `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
 - `application/services/publication.py`: graph, media, and version-file publication gate.

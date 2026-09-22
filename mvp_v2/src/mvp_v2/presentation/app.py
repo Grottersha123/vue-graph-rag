@@ -74,7 +74,7 @@ from mvp_v2.application.rag.preparation.model_operations import (
     build_embeddings,
     describe_asset,
 )
-from mvp_v2.application.retrieval import SearchService
+from mvp_v2.application.rag.retrieval.retrieval import SearchService
 from mvp_v2.application.services.publication import SnapshotPublicationService
 from mvp_v2.bootstrap.ui import UiRuntimeConfig, default_runtime_config
 from mvp_v2.domain.graph import Asset, Document
