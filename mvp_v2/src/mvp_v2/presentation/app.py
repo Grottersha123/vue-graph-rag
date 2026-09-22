@@ -28,6 +28,7 @@ from mvp_v2.application.chunk_backfill import (
     delete_all_chunks_and_embeddings,
     regenerate_all_chunks,
 )
+from mvp_v2.application.conversation.rendering import render_citation_details
 from mvp_v2.application.deletion import preview_deletion
 from mvp_v2.application.document_editing import (
     DocumentMetadataUpdate,
@@ -1913,22 +1914,7 @@ def _chat(config: UiRuntimeConfig | None) -> None:
         )
         st.write(answer.answer)
         for citation in answer.citations:
-            chunk_label = (
-                "asset"
-                if citation.matched_chunk_position is None
-                else (
-                    f"{citation.matched_chunk_position + 1}/"
-                    f"{citation.document_chunk_count}"
-                )
-            )
-            st.write(
-                f"[{citation.number}] {citation.document_title} — "
-                f"score={citation.score:.6f}, chunk={chunk_label}, "
-                f"context={citation.context_scope}, "
-                f"document={citation.document_id}, version={citation.version}, "
-                f"evidence={citation.evidence_id}, "
-                f"source={citation.source_url or citation.local_path}"
-            )
+            st.write(render_citation_details(citation))
 
 
 def _errors(config: UiRuntimeConfig | None) -> None:

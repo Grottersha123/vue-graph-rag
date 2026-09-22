@@ -16,6 +16,10 @@ mvp_v2/src/mvp_v2/
     invariants.py            cross-row graph validation
     chunking.py              deterministic text chunk policy
   application/               use cases and non-persisted commands/results
+    conversation/            versioned support prompts and trusted citation rendering
+      conf.py                 immutable Chat/MCP prompt profiles and pure templates
+      prompting.py            evidence limits and prompt assembly
+      rendering.py            strict citations and human-readable provenance
     manifests.py             current-only dump and database manifests
     json_encoding.py         canonical JSON bytes for signed artifacts
     dto/                     embedding/search/deletion DTOs

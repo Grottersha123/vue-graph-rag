@@ -94,9 +94,7 @@ def test_capture_reads_manifest_identity() -> None:
 
     assert provenance.database_name == "graph-rag-bge-m3-v1"
     assert provenance.source_dump_number == 9
-    assert provenance.embedding_space == (
-        "ollama / bge-m3 / 790764642607 / dim 1024"
-    )
+    assert provenance.embedding_space == ("ollama / bge-m3 / 790764642607 / dim 1024")
     assert empty.database_name == ""
     assert empty.source_dump_number is None
 
@@ -171,8 +169,9 @@ def test_export_renders_answer_citations_and_missing_provenance() -> None:
     assert "- Chat model: not recorded (version not recorded)" in text
     assert "- Database: not recorded" in text
     assert "- Source dump: not recorded" in text
+    assert "- [1]" not in text
     assert (
-        "- [1] Гайд по телеграму — score=0.910000, chunk=3/12, "
-        "context=chunk_window, document=document-1, version=2, "
-        "source=file://docs/a.md" in text
+        "- Документ «Гайд по телеграму» (ID document-1), версия 2, "
+        "чанк 3 из 12, фактическая позиция 2, источник file://docs/a.md; "
+        "score=0.910000; context=chunk_window; evidence ID=embedding-1" in text
     )

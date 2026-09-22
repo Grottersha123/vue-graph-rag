@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from mvp_v2.application.conversation.rendering import render_citation_details
 from mvp_v2.application.dto.chat import ChatAnswer
 from mvp_v2.application.manifests import DatabaseManifest
 
@@ -31,9 +32,7 @@ class ChatTurnProvenance(BaseModel):
         chat_model_version: str,
     ) -> ChatTurnProvenance:
         if manifest is None:
-            return cls(
-                chat_model=chat_model, chat_model_version=chat_model_version
-            )
+            return cls(chat_model=chat_model, chat_model_version=chat_model_version)
         space = manifest.embedding_space
         return cls(
             chat_model=chat_model,
@@ -73,12 +72,6 @@ class ChatTurnProvenance(BaseModel):
         )
 
 
-def _chunk_label(position: int | None, count: int) -> str:
-    if position is None:
-        return "asset"
-    return f"{position + 1}/{count}"
-
-
 def render_chat_markdown(
     history: Sequence[tuple[str, ChatAnswer, ChatTurnProvenance]],
     *,
@@ -105,14 +98,6 @@ def render_chat_markdown(
         if answer.citations:
             lines.append("Citations:")
             for citation in answer.citations:
-                lines.append(
-                    f"- [{citation.number}] {citation.document_title} — "
-                    f"score={citation.score:.6f}, "
-                    f"chunk={_chunk_label(citation.matched_chunk_position, citation.document_chunk_count)}, "  # noqa: E501
-                    f"context={citation.context_scope}, "
-                    f"document={citation.document_id}, "
-                    f"version={citation.version}, "
-                    f"source={citation.source_url or citation.local_path}"
-                )
+                lines.append(f"- {render_citation_details(citation)}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"

@@ -4,6 +4,7 @@ import base64
 import http.client
 import ipaddress
 import json
+import math
 import socket
 from collections.abc import Callable
 from typing import Protocol, cast
@@ -200,8 +201,20 @@ class LocalHttpTransport:
 
 
 class OllamaAdapter:
-    def __init__(self, transport: JsonTransport) -> None:
+    def __init__(
+        self,
+        transport: JsonTransport,
+        *,
+        generation_temperature: float = 0.0,
+    ) -> None:
+        if (
+            isinstance(generation_temperature, bool)
+            or not math.isfinite(generation_temperature)
+            or not 0.0 <= generation_temperature <= 2.0
+        ):
+            raise ValueError("generation temperature must be between 0 and 2")
         self._transport = transport
+        self._generation_temperature = float(generation_temperature)
 
     def describe(self, *, image: bytes, mime_type: str, model: str) -> str:
         del mime_type
@@ -219,7 +232,13 @@ class OllamaAdapter:
 
     def generate(self, *, prompt: str, model: str) -> str:
         result = self._object(
-            "/api/generate", {"model": model, "prompt": prompt, "stream": False}
+            "/api/generate",
+            {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": self._generation_temperature},
+            },
         )
         response = result.get("response")
         if not isinstance(response, str):

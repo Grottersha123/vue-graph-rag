@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 import pytest
 
 from mvp_v2.adapters import ollama
-from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaError
+from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter, OllamaError
 
 
 @dataclass
@@ -154,3 +155,29 @@ def test_transport_pins_validated_address_and_preserves_host_header(
 
     assert calls == [(("192.168.1.20", 11434), 7.0)]
     assert pinned.sock is socket_marker
+
+
+def test_adapter_sends_deterministic_generation_temperature() -> None:
+    class RecordingTransport:
+        def __init__(self) -> None:
+            self.payload: dict[str, object] | None = None
+
+        def post(self, path: str, payload: bytes) -> bytes:
+            assert path == "/api/generate"
+            decoded = json.loads(payload)
+            assert isinstance(decoded, dict)
+            self.payload = decoded
+            return b'{"response":"ok"}'
+
+    transport = RecordingTransport()
+    adapter = OllamaAdapter(transport, generation_temperature=0.0)
+
+    assert adapter.generate(prompt="question", model="gemma4:latest") == "ok"
+    assert transport.payload == {
+        "model": "gemma4:latest",
+        "prompt": "question",
+        "stream": False,
+        "options": {"temperature": 0.0},
+    }
+    with pytest.raises(ValueError, match="temperature"):
+        OllamaAdapter(transport, generation_temperature=float("nan"))

@@ -11,12 +11,14 @@
 - `Authorize question embedding`.
 - Точные chat model и model version.
 - `Authorize answer generation` — отдельное разрешение генерации.
+- Versioned prompt profile из `application/conversation/conf.py`; default — `support-v1`.
+- Ollama generation temperature — `0.0` для детерминированной отладки.
 
 Поле `Ask from retrieved evidence` доступно только при валидном runtime и актуальной активной DB. После ввода вопроса требуются обе authorizations и обе части identity chat-модели.
 
 ## История и экспорт
 
-Каждый успешный turn сохраняет вопрос, ответ и provenance: chat model/version, DB и source dump. Для ответа выводятся citations со score, chunk/asset, context, document, version, evidence ID и source. Production prompt передаёт для каждого evidence точную `SOURCE [N]` строку с document title/id, version, человекочитаемым `chunk_ordinal`, сохранённым `chunk_position`, общим числом chunks и source reference. Модель обязана сослаться на evidence в теле ответа и дословно вернуть строки использованных citations внутри единственного завершающего блока `<SOURCES>...</SOURCES>`. Parser не учитывает citation tokens из source-блока, отклоняет неизвестные, дублированные и расширенные SOURCE-строки; нарушение вызывает одну повторную генерацию, а затем ошибку контракта.
+Каждый успешный turn сохраняет вопрос, ответ и provenance: chat model/version, DB и source dump. Модель использует короткие технические citations строгого формата `[N]` или `[N, M]` только внутри raw response. Application валидирует их и детерминированно заменяет перед показом пользователю на человекочитаемые ссылки с document title/id, version, номером чанка, его фактической позицией, общим числом chunks и source reference. Те же ссылки без технической нумерации используются в Chat UI и Markdown export. Модель не генерирует source metadata и не управляет её порядком. Некорректная техническая citation вызывает одну повторную генерацию, а затем ошибку контракта.
 
 - `Clear chat history` очищает session history.
 - `Export chat as Markdown` появляется при непустой истории и формирует файл в памяти; на серверный диск файл не записывается.

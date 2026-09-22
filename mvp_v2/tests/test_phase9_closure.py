@@ -11,6 +11,15 @@ import pytest
 
 from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
 from mvp_v2.application.chat import NOT_ENOUGH_EVIDENCE, ChatError, ChatService
+from mvp_v2.application.conversation.conf import (
+    DEFAULT_MCP_PROMPT_TEMPLATE,
+    DEFAULT_PROMPT_TEMPLATE,
+    MCP_PROMPT_TEMPLATES,
+    PROMPT_TEMPLATES,
+    render_mcp_answer_prompt,
+    render_mcp_cypher_prompt,
+)
+from mvp_v2.application.conversation.rendering import referenced_numbers
 from mvp_v2.application.dto.chat import ChatRequest
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
@@ -80,12 +89,7 @@ class Model:
 
     def generate(self, *, prompt: str, model: str) -> str:
         self.calls.append(prompt)
-        source_line = next(
-            line.removeprefix("Required source line: ")
-            for line in prompt.splitlines()
-            if line.startswith("Required source line: ")
-        )
-        return f"Bound answer [1]\n<SOURCES>\n{source_line}\n</SOURCES>"
+        return "Bound answer [1]"
 
 
 class SequenceModel:
@@ -121,17 +125,14 @@ def evidence() -> Evidence:
     )
 
 
-def source_line(number: int) -> str:
-    return (
-        f'SOURCE [{number}] document_title="Title" document_id="document" '
-        "version=1 chunk_ordinal=1 chunk_position=0 document_chunk_count=1 "
-        'source_ref="documents/a.md"'
-    )
+REFERENCE = (
+    "документе «Title» (ID document), версия 1, чанк 1 из 1, "
+    "фактическая позиция 0, источник documents/a.md"
+)
 
 
-def sourced_response(text: str, *numbers: int) -> str:
-    lines = "\n".join(source_line(number) for number in numbers)
-    return f"{text}\n<SOURCES>\n{lines}\n</SOURCES>"
+def rendered_response(text: str) -> str:
+    return text.replace("[1]", f"(эту информацию можно найти в {REFERENCE})")
 
 
 def request(*, generation: bool = True) -> ChatRequest:
@@ -168,52 +169,97 @@ def test_chat_without_evidence_has_fixed_answer_and_zero_generation_calls() -> N
         False,
         [],
     )
+    assert "не хватает подтверждённой информации" in answer.answer
+    assert "Попробуйте уточнить вопрос" in answer.answer
 
 
-def test_chat_binds_response_and_numbered_citation() -> None:
+def test_chat_renders_human_source_reference_and_keeps_typed_citation() -> None:
     model = Model()
     answer = ChatService(Search((evidence(),)), model).answer(request())
-    assert answer.answer == sourced_response("Bound answer [1]", 1)
+    assert answer.answer == rendered_response("Bound answer [1]")
     assert answer.citations[0].number == 1
     assert answer.citations[0].evidence_id == answer.evidence[0].embedding_id
-    assert "Respond in Russian." in model.calls[0]
+    assert "caring and patient VEUnicorn student support specialist" in model.calls[0]
+    assert "Answer in Russian" in model.calls[0]
     assert len(model.calls[0]) < 16_000
 
 
-def test_chat_retries_once_for_missing_source_metadata() -> None:
-    model = SequenceModel(
-        (
-            "Answer without source metadata [1]",
-            sourced_response("Correct answer [1]", 1),
-        )
+def test_prompt_profiles_are_versioned_and_all_policy_text_is_english() -> None:
+    assert PROMPT_TEMPLATES[DEFAULT_PROMPT_TEMPLATE.name] is DEFAULT_PROMPT_TEMPLATE
+    assert (
+        MCP_PROMPT_TEMPLATES[DEFAULT_MCP_PROMPT_TEMPLATE.name]
+        is DEFAULT_MCP_PROMPT_TEMPLATE
     )
+    policy_texts = (
+        DEFAULT_PROMPT_TEMPLATE.system_prompt,
+        DEFAULT_PROMPT_TEMPLATE.answer_policy,
+        DEFAULT_PROMPT_TEMPLATE.citation_retry_notice,
+        DEFAULT_MCP_PROMPT_TEMPLATE.cypher_generation,
+        DEFAULT_MCP_PROMPT_TEMPLATE.answer_generation,
+    )
+    assert all(text.isascii() for text in policy_texts)
+    assert "MATCH" in render_mcp_cypher_prompt(
+        DEFAULT_MCP_PROMPT_TEMPLATE,
+        question="Find a document",
+        schema="Document(id STRING)",
+    )
+    assert "Answer the user's question in Russian" in render_mcp_answer_prompt(
+        DEFAULT_MCP_PROMPT_TEMPLATE,
+        question="What is required?",
+        cypher="MATCH (d:Document) RETURN d LIMIT 1",
+        result="one row",
+    )
+
+
+def test_chat_accepts_an_injected_versioned_prompt_template() -> None:
+    model = Model()
+    template = replace(
+        DEFAULT_PROMPT_TEMPLATE,
+        name="support-test",
+        system_prompt="CUSTOM SUPPORT PERSONA",
+    )
+
+    ChatService(Search((evidence(),)), model, prompt_template=template).answer(
+        request()
+    )
+
+    assert "PROMPT_PROFILE: support-test" in model.calls[0]
+    assert "CUSTOM SUPPORT PERSONA" in model.calls[0]
+
+
+def test_chat_retries_once_for_invalid_technical_citation() -> None:
+    model = SequenceModel(("Wrong reference [15]", "Correct answer [1]"))
 
     answer = ChatService(Search((evidence(),)), model).answer(request())
 
-    assert answer.answer == sourced_response("Correct answer [1]", 1)
+    assert answer.answer == rendered_response("Correct answer [1]")
     assert len(model.calls) == 2
-    assert "The only allowed citation tokens are: [1]." in model.calls[1]
-    assert "one <SOURCES>...</SOURCES> block." in model.calls[1]
+    assert "The only allowed tokens are: [1]." in model.calls[1]
+    assert "Do not add a SOURCE block or metadata." in model.calls[1]
 
 
-def test_chat_parses_combined_and_nonsense_citation_tokens() -> None:
-    model = SequenceModel((sourced_response("Ответ [1, 2] и [заметка]", 1, 2),))
+def test_chat_renders_only_strict_citations_and_preserves_other_brackets() -> None:
+    model = SequenceModel(
+        ("Ответ [1, 2] и [заметка], [версия 1], [1oops], [Python 3], снова [1, 1]",)
+    )
 
     answer = ChatService(Search((evidence(), evidence())), model).answer(request())
 
     assert [citation.number for citation in answer.citations] == [1, 2]
+    assert "[1, 2]" not in answer.answer and "[1, 1]" not in answer.answer
+    assert "[заметка], [версия 1], [1oops], [Python 3]" in answer.answer
+    assert answer.answer.count(REFERENCE) == 3
 
 
-def test_chat_rejects_source_only_citation_and_tampered_source_line() -> None:
-    model = SequenceModel(
-        (
-            f"Unsupported claim.\n<SOURCES>\n{source_line(1)}\n</SOURCES>",
-            f"Unsupported claim [1]\n<SOURCES>\n"
-            f"{source_line(1)} forged_field=true\n</SOURCES>",
-        )
-    )
+def test_chat_rejects_invalid_citations_after_one_retry() -> None:
+    with pytest.raises(ChatError, match="invalid evidence number"):
+        referenced_numbers("Out of range [2]", 1)
+    with pytest.raises(ChatError, match="invalid evidence number"):
+        referenced_numbers("Mixed valid and invalid [1, 2]", 1)
 
-    with pytest.raises(ChatError, match="invalid source metadata"):
+    model = SequenceModel(("Malformed [01]", "Still malformed [1, x]"))
+
+    with pytest.raises(ChatError, match="cites no valid evidence number"):
         ChatService(Search((evidence(),)), model).answer(request())
 
     assert len(model.calls) == 2
