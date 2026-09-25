@@ -4,14 +4,21 @@ version = "0.1.0"
 description = "Local Streamlit multimodal Graph RAG"
 requires-python = ">=3.11"
 dependencies = [
+    "aiogram>=3.31.0",
+    "duckdb>=1.5.5",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "ipykernel>=7.3.0",
     "ladybug==0.19.1",
     "loguru>=0.7,<1",
     "mcp>=1.26,<2",
     "pillow==12.3.0",
     "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.3",
+    "redis>=8.1.0",
     "streamlit==1.63.0",
+    "uvicorn[standard]>=0.53.0",
 ]
 
 [dependency-groups]

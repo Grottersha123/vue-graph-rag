@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from mvp_v2.application.dto.retrieval import (
     EmbeddingProviderOutput,
@@ -24,22 +24,58 @@ class SearchError(ValueError):
     pass
 
 
+class EvidenceHydrator(Protocol):
+    def hydrate(self, hit: VectorHit) -> Evidence: ...
+
+
+class SearchExecutionLock(Protocol):
+    def acquire(self) -> bool: ...
+
+    def release(self) -> None: ...
+
+
+class SnapshotEvidenceHydrator:
+    def __init__(self, snapshot: GraphSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def hydrate(self, hit: VectorHit) -> Evidence:
+        return _hydrate(self._snapshot, hit)
+
+
 class SearchService:
     def __init__(
         self,
         model: EmbeddingModel,
         ann: AnnPort,
         manifest: DatabaseManifest,
-        snapshot: GraphSnapshot,
+        snapshot: GraphSnapshot | None = None,
+        *,
+        evidence_hydrator: EvidenceHydrator | None = None,
+        execution_lock: SearchExecutionLock | None = None,
     ) -> None:
-        self._model, self._ann, self._manifest, self._snapshot = (
-            model,
-            ann,
-            manifest,
-            snapshot,
-        )
+        if (snapshot is None) == (evidence_hydrator is None):
+            raise ValueError("provide exactly one evidence source")
+        self._model = model
+        self._ann = ann
+        self._manifest = manifest
+        self._hydrator: EvidenceHydrator
+        if snapshot is not None:
+            self._hydrator = SnapshotEvidenceHydrator(snapshot)
+        else:
+            assert evidence_hydrator is not None
+            self._hydrator = evidence_hydrator
+        self._execution_lock = execution_lock
 
     def search(self, request: SearchRequest) -> tuple[Evidence, ...]:
+        if self._execution_lock is None:
+            return self._search(request)
+        self._execution_lock.acquire()
+        try:
+            return self._search(request)
+        finally:
+            self._execution_lock.release()
+
+    def _search(self, request: SearchRequest) -> tuple[Evidence, ...]:
         if request.space != self._manifest.embedding_space:
             raise SearchError("configured identity does not match database manifest")
         if (
@@ -77,7 +113,7 @@ class SearchService:
         for hit in hits:
             if hit.score < request.minimum_score:
                 continue
-            item = _hydrate(self._snapshot, hit)
+            item = self._hydrator.hydrate(hit)
             existing = next(
                 (e for e in evidence if e.version_id == item.version_id), None
             )

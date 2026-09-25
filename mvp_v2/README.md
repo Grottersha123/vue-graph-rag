@@ -66,6 +66,122 @@ creation. The UI has no legacy migration path and does not open a native databas
 external vector provisioning. Every vision, embedding, or generation call still
 requires fresh explicit authorization.
 
+## Local FastAPI/Telegram gateway runtime
+
+The gateway reads one explicit immutable database artifact and never scans for the
+latest database. Configure the ignored local `.env` with:
+
+- `MVP_V2_DATABASE_NAME` — the artifact name without `.lbdb`;
+- `MVP_V2_CHAT_MODEL` and `MVP_V2_CHAT_MODEL_VERSION`;
+- `TELEGRAM_ALLOWED_USER_IDS` — comma-separated positive Telegram user IDs;
+- optionally `MVP_V2_OLLAMA_BASE_URL`, bounded
+  `MVP_V2_OLLAMA_TIMEOUT_SECONDS` (default `120`, maximum `600`),
+  `MVP_V2_MODEL_CONCURRENCY`, and the runtime directory overrides documented
+  by `GatewaySettings`.
+
+Direct non-container runs additionally read `MVP_V2_BACKEND_TOKEN` and
+`TELEGRAM_BOT_TOKEN` from their environment. Compose does not use those token
+environment variables; it reads ignored files under `secrets/` instead.
+
+The selected artifact must be
+`runtime/databases/${MVP_V2_DATABASE_NAME}.lbdb`. The backend validates its
+canonical manifest, compares table counts and embedding identity with the open
+artifact, and opens `database.lbug` read-only. It does not read `runtime/dumps/`,
+run ingestion, or build a database.
+
+Host-side checks and non-container runs must use the external environment:
+
+```console
+UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
+  uv run --project mvp_v2 --env-file mvp_v2/.env \
+  python -m pytest mvp_v2/tests/backend
+
+UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
+  uv run --project mvp_v2 --env-file mvp_v2/.env \
+  python -m mvp_v2.backend
+
+UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
+  uv run --project mvp_v2 --env-file mvp_v2/.env \
+  python -m mvp_v2.telegram_bot
+```
+
+The local API provides:
+
+- `GET /health`;
+- `GET /v1/profiles`;
+- `POST /v1/messages`;
+- `PUT /v1/users/{telegram_user_id}/profile`;
+- `POST /v1/feedback`.
+
+All `/v1/*` routes require `Authorization: Bearer <MVP_V2_BACKEND_TOKEN>`.
+`GET /health` remains credential-free for the local container healthcheck.
+
+Prompt profiles come from `PROMPT_TEMPLATES`; Redis stores only the selected
+`profile_id`. Effective selection is explicit request profile, then the user's
+Redis default, then `DEFAULT_PROMPT_TEMPLATE`. The gateway rejects excess work
+immediately with HTTP 503 at the global limit of six or the configured per-model
+limit.
+
+Non-container runs write `backend.jsonl`, `telegram.jsonl`, `errors.jsonl`,
+`prompt_traces.jsonl`, and `feedback.jsonl` under `runtime/logs/gateway/`.
+Compose stores the same files in its `gateway-logs` named volume. Only
+`prompt_traces.jsonl` contains complete rendered prompts. Use
+`mvp_v2.analytics.chat_logs.ChatLogAnalytics` or `standard_reports()` for
+offline DuckDB reports and request-ID debugging.
+
+Podman Compose runs backend, Telegram, and Redis as separate services. Run the
+following commands from `mvp_v2/`:
+
+```console
+make deploy
+make status
+```
+
+`make deploy` checks host tools and required `.env` keys, securely prompts for a
+missing Telegram token, generates the shared gateway token, validates Compose,
+builds the images, waits for readiness, and runs runtime and container-security
+checks. Secret files are ignored, mode `0600`, and their values are not printed.
+The verification includes a real authenticated message request, so it fails when
+embedding, retrieval, or generation is unavailable rather than trusting the
+shallow health endpoint alone.
+
+Useful targets are:
+
+- `make secrets` — create or validate the two secret files;
+- `make config` — validate Compose without printing resolved environment values;
+- `make health` — print the public backend health response with bounded `curl`;
+- `make verify` — rerun smoke, mount, port, authentication, secret-log, and RAG checks;
+- `make diagnose-models` — call the configured embedding and generation models
+  without printing prompts, tokens, or model responses;
+- `make export-logs` — copy the five JSONL streams and the last 500 backend and
+  Telegram container log lines to the ignored `runtime/logs/gateway-export/`
+  directory;
+- `make logs` — show the last 100 Compose log lines without following;
+- `make down` — stop and remove Compose containers/network without deleting secrets or named volumes;
+- `make clean` — explicitly remove Compose containers/network while preserving images, Redis/log volumes, secrets, `.env`, and database artifacts.
+
+The shared image includes `curl` for bounded in-container diagnostics. For example:
+
+```console
+podman-compose exec backend curl -fsS http://127.0.0.1:8000/health
+```
+
+The image provisions the Ladybug `vector` extension at build time under
+`/opt/mvp-v2/ladybug-home`; runtime only loads it and never installs extensions
+or mutates the selected database artifact.
+
+Compose mounts only `runtime/databases/` read-only and the `gateway-logs` named
+volume writable. `errors.jsonl` can contain bounded local exception tracebacks,
+and `prompt_traces.jsonl` contains full rendered prompts; treat both as sensitive
+local diagnostic files. Compose does not mount `.venv`, `runtime/dumps/`, a home
+directory, SSH/GPG material, or a container socket. Ollama remains on the host and defaults
+to `host.containers.internal` for the container runtime.
+
+After changing gateway DTOs or services in a long-lived notebook/process,
+restart the interpreter or reload in dependency order: contracts, profiles and
+audit modules first; service/runtime modules second; application composition
+last. Validate DTO construction in a fresh interpreter before reuse.
+
 ## Implemented Phase 9 controls
 
 The eight-tab UI wires ingestion preview/commit, document views and deletion preview,

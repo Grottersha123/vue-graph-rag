@@ -7,4 +7,12 @@
 
 # You cannot
     - Change ./vue-graph-rag/.venv it is denied, ask me to add library
-    -
+    - Change `mvp_v2/.venv`. It is a host-owned environment and is immutable for every agent and subagent.
+    - Create, remove, repair, synchronize, chmod, or execute anything from `mvp_v2/.venv`.
+    - Fall back to `mvp_v2/.venv` when the external environment is absent or broken. Stop and ask me instead.
+
+# Protected mvp_v2 Python environment
+    - Run every mvp_v2 Python command with `UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv`.
+    - Never run bare `uv`, `uv run`, `uv sync`, `pytest`, or other Python project commands in `mvp_v2`.
+    - Before the first project command, verify in a fresh interpreter that `sys.executable` starts with `/tmp/vue-graph-rag-mvp-v2/.venv/`.
+    - Subagents may perform static review only. They must not run project commands. The root agent runs all checks in the external environment.

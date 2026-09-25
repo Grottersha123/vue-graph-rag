@@ -9,12 +9,13 @@ import tempfile
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 from mvp_v2.adapters.csv.snapshot import read_snapshot
 from mvp_v2.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
+    Evidence,
     SubjectKind,
     SubjectRef,
     VectorHit,
@@ -500,3 +501,178 @@ class LadybugAnn:
             if len(hits) == request.limit:
                 break
         return tuple(sorted(hits, key=lambda x: (-x.score, x.embedding_id)))
+
+
+class LadybugEvidenceHydrator:
+    """Hydrate ANN hits directly from the immutable Ladybug artifact."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def hydrate(self, hit: VectorHit) -> Evidence:
+        if hit.subject.kind is SubjectKind.CHUNK:
+            return self._hydrate_chunk(hit)
+        if hit.subject.kind is SubjectKind.ASSET:
+            return self._hydrate_asset(hit)
+        raise LadybugCapabilityError("unsupported evidence subject kind")
+
+    def _hydrate_chunk(self, hit: VectorHit) -> Evidence:
+        rows = _execute(
+            self._connection,
+            "MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)-[:HAS_CHUNK]->"
+            "(c:Chunk {id: $id}) RETURN c.content, c.position, v.id, v.version, "
+            "v.local_path, v.is_current, d.id, d.title, d.source_url, d.is_active",
+            {"id": hit.subject.id},
+        )
+        row = self._require_current_row(rows)
+        version_id = str(row[2])
+        chunks = self._version_chunks(version_id)
+        text, context_scope = self._chunk_context(chunks, hit.subject.id)
+        return self._build_evidence(
+            hit=hit,
+            text=text,
+            matched_chunk_position=int(cast(int, row[1])),
+            context_scope=context_scope,
+            version_id=version_id,
+            version=int(cast(int, row[3])),
+            local_path=str(row[4] or ""),
+            document_id=str(row[6]),
+            document_title=str(row[7]),
+            source_url=str(row[8] or ""),
+            document_chunk_count=len(chunks),
+        )
+
+    def _hydrate_asset(self, hit: VectorHit) -> Evidence:
+        rows = _execute(
+            self._connection,
+            "MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)-[:HAS_ASSET]->"
+            "(a:Asset {id: $id}) RETURN a.description, a.position, v.id, v.version, "
+            "v.local_path, v.is_current, d.id, d.title, d.source_url, d.is_active",
+            {"id": hit.subject.id},
+        )
+        row = self._require_current_row(rows)
+        text = str(row[0])
+        if not text.strip():
+            raise LadybugCapabilityError("hit does not hydrate to non-empty evidence")
+        version_id = str(row[2])
+        return self._build_evidence(
+            hit=hit,
+            text=text,
+            matched_chunk_position=None,
+            context_scope="asset",
+            version_id=version_id,
+            version=int(cast(int, row[3])),
+            local_path=str(row[4] or ""),
+            document_id=str(row[6]),
+            document_title=str(row[7]),
+            source_url=str(row[8] or ""),
+            document_chunk_count=len(self._version_chunks(version_id)),
+        )
+
+    @staticmethod
+    def _require_current_row(rows: list[list[object]]) -> list[object]:
+        if len(rows) != 1 or len(rows[0]) != 10:
+            raise LadybugCapabilityError("hit ownership is missing or ambiguous")
+        row = rows[0]
+        if row[5] is not True or row[9] is not True:
+            raise LadybugCapabilityError(
+                "hit does not hydrate to current active evidence"
+            )
+        return row
+
+    def _version_chunks(self, version_id: str) -> tuple[tuple[str, int, str], ...]:
+        rows = _execute(
+            self._connection,
+            "MATCH (v:DocumentVersion {id: $id})-[:HAS_CHUNK]->(c:Chunk) "
+            "RETURN c.id, c.position, c.content ORDER BY c.position, c.id",
+            {"id": version_id},
+        )
+        return tuple((str(row[0]), int(cast(int, row[1])), str(row[2])) for row in rows)
+
+    @staticmethod
+    def _chunk_context(
+        chunks: tuple[tuple[str, int, str], ...], subject_id: str
+    ) -> tuple[str, Literal["full_document", "chunk_window"]]:
+        matches = [index for index, item in enumerate(chunks) if item[0] == subject_id]
+        if len(matches) != 1:
+            raise LadybugCapabilityError("chunk context is missing or ambiguous")
+        full_text = "\n\n".join(item[2] for item in chunks)
+        if len(full_text) <= 1_400:
+            return full_text, "full_document"
+        matched_index = matches[0]
+        start = max(0, matched_index - 1)
+        window_text = "\n\n".join(item[2] for item in chunks[start : matched_index + 2])
+        matched_offset = window_text.find(chunks[matched_index][2])
+        excerpt_start = max(0, min(matched_offset - 350, len(window_text) - 1_400))
+        return window_text[excerpt_start : excerpt_start + 1_400], "chunk_window"
+
+    def _labels(self, query: str, identity: str) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    str(row[0])
+                    for row in _execute(self._connection, query, {"id": identity})
+                    if row and str(row[0]).strip()
+                }
+            )
+        )
+
+    def _build_evidence(
+        self,
+        *,
+        hit: VectorHit,
+        text: str,
+        matched_chunk_position: int | None,
+        context_scope: Literal["asset", "full_document", "chunk_window"],
+        version_id: str,
+        version: int,
+        local_path: str,
+        document_id: str,
+        document_title: str,
+        source_url: str,
+        document_chunk_count: int,
+    ) -> Evidence:
+        source_types = self._labels(
+            "MATCH (d:Document {id: $id})-[:HAS_SOURCE_TYPE]->(s:SourceType) RETURN s.code",
+            document_id,
+        )
+        statuses = self._labels(
+            "MATCH (v:DocumentVersion {id: $id})-[:HAS_STATUS]->(s:Status) RETURN s.name",
+            version_id,
+        )
+        roles = self._labels(
+            "MATCH (d:Document {id: $id})-[:FOR_ROLE]->(r:Role) RETURN r.name",
+            document_id,
+        )
+        processes = self._labels(
+            "MATCH (d:Document {id: $id})-[:DESCRIBES]->(p:Process) RETURN p.name",
+            document_id,
+        )
+        linked_out = self._labels(
+            "MATCH (d:Document {id: $id})-[:LINKS_TO]->(other:Document) RETURN other.id",
+            document_id,
+        )
+        linked_in = self._labels(
+            "MATCH (other:Document)-[:LINKS_TO]->(d:Document {id: $id}) RETURN other.id",
+            document_id,
+        )
+        return Evidence(
+            subject=hit.subject,
+            embedding_id=hit.embedding_id,
+            score=hit.score,
+            text=text,
+            matched_chunk_position=matched_chunk_position,
+            document_chunk_count=document_chunk_count,
+            context_scope=context_scope,
+            document_id=document_id,
+            document_title=document_title,
+            source_url=source_url,
+            version_id=version_id,
+            version=version,
+            local_path=local_path,
+            source_type=source_types[0] if source_types else "unknown",
+            statuses=statuses,
+            roles=roles,
+            processes=processes,
+            linked_document_ids=tuple(sorted({*linked_out, *linked_in})),
+        )

@@ -1,0 +1,114 @@
+services:
+  redis:
+    image: docker.io/library/redis:8.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    restart: unless-stopped
+    networks: [gateway]
+    volumes:
+      - profile-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt: ["no-new-privileges:true"]
+    cap_drop:
+      - ALL
+    # Required only for the official entrypoint to prepare /data and drop to redis.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  backend:
+    build:
+      context: .
+      dockerfile: Containerfile
+    command: ["python", "-m", "mvp_v2.backend"]
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [gateway]
+    ports:
+      - "127.0.0.1:${MVP_V2_API_PORT:-8000}:8000"
+    environment:
+      MVP_V2_API_HOST: "0.0.0.0"
+      MVP_V2_API_PORT: "8000"
+      MVP_V2_DATABASE_NAME: "${MVP_V2_DATABASE_NAME:?set MVP_V2_DATABASE_NAME}"
+      MVP_V2_DATABASES_ROOT: "/app/runtime/databases"
+      MVP_V2_GATEWAY_LOG_DIRECTORY: "/var/lib/mvp-v2/gateway-logs"
+      MVP_V2_LADYBUG_HOME: "/opt/mvp-v2/ladybug-home"
+      MVP_V2_REDIS_URL: "redis://redis:6379/0"
+      MVP_V2_OLLAMA_BASE_URL: "${MVP_V2_OLLAMA_BASE_URL:-http://host.containers.internal:11434}"
+      MVP_V2_OLLAMA_TIMEOUT_SECONDS: "${MVP_V2_OLLAMA_TIMEOUT_SECONDS:-120}"
+      MVP_V2_OLLAMA_ALLOWED_LAN_HOSTS: "${MVP_V2_OLLAMA_ALLOWED_LAN_HOSTS:-host.containers.internal}"
+      MVP_V2_CHAT_MODEL: "${MVP_V2_CHAT_MODEL:?set MVP_V2_CHAT_MODEL}"
+      MVP_V2_CHAT_MODEL_VERSION: "${MVP_V2_CHAT_MODEL_VERSION:?set MVP_V2_CHAT_MODEL_VERSION}"
+      MVP_V2_MINIMUM_SIMILARITY_SCORE: "${MVP_V2_MINIMUM_SIMILARITY_SCORE:-0.55}"
+      MVP_V2_TOTAL_CONCURRENCY: "6"
+      MVP_V2_MODEL_CONCURRENCY: "${MVP_V2_MODEL_CONCURRENCY:-2}"
+      TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:?set TELEGRAM_ALLOWED_USER_IDS}"
+      MVP_V2_BACKEND_TOKEN_FILE: "/run/secrets/gateway_token"
+    secrets:
+      - gateway_token
+    volumes:
+      - type: bind
+        source: "${MVP_V2_DATABASES_DIRECTORY:-./runtime/databases}"
+        target: /app/runtime/databases
+        read_only: true
+      - gateway-logs:/var/lib/mvp-v2/gateway-logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  telegram:
+    build:
+      context: .
+      dockerfile: Containerfile
+    command: ["python", "-m", "mvp_v2.telegram_bot"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [gateway]
+    environment:
+      MVP_V2_BACKEND_URL: "http://backend:8000"
+      MVP_V2_REDIS_URL: "redis://redis:6379/1"
+      MVP_V2_GATEWAY_LOG_DIRECTORY: "/var/lib/mvp-v2/gateway-logs"
+      TELEGRAM_BOT_TOKEN_FILE: "/run/secrets/telegram_bot_token"
+      MVP_V2_BACKEND_TOKEN_FILE: "/run/secrets/gateway_token"
+      TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:?set TELEGRAM_ALLOWED_USER_IDS}"
+    secrets:
+      - telegram_bot_token
+      - gateway_token
+    volumes:
+      - gateway-logs:/var/lib/mvp-v2/gateway-logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+networks:
+  gateway:
+
+volumes:
+  profile-data:
+  gateway-logs:
+
+secrets:
+  telegram_bot_token:
+    file: "${TELEGRAM_BOT_TOKEN_FILE:-./secrets/telegram_bot_token}"
+  gateway_token:
+    file: "${MVP_V2_BACKEND_TOKEN_FILE:-./secrets/gateway_token}"
