@@ -1,13 +1,13 @@
-# MVP v2 — target multimodal Graph RAG schema
+# MVP v2 — canonical multimodal Graph RAG schema
 
-Status: **owner-approved target contract**. This is the canonical contract for the new `mvp_v2` implementation. The legacy
-`mvp/GRAPH DB Schema.md` and the previous `agentic_mvp` implementation remain
-unchanged input/reference sources.
+Status: **implemented owner-approved contract**. This document is the canonical
+graph and storage contract for `mvp_v2`. The project is self-contained and does
+not import legacy repository prototypes or their data artifacts.
 
 ## Product scope
 
-The product is a local Streamlit application based on the useful workflows of
-`mvp`:
+The product is a local multimodal Graph RAG system with Streamlit, FastAPI, and
+Telegram entry points. Its core workflows are:
 
 - upload a URL, PDF, Markdown, HTML, or an image collection;
 - preview extracted metadata before committing it;
@@ -17,8 +17,8 @@ The product is a local Streamlit application based on the useful workflows of
 - select a ready LadybugDB for vector search and Chatbot;
 - return text and image-description evidence with document citations.
 
-This is a deliberately small multimodal Graph RAG. It does not use the architecture
-or chunking model from `research/articles`.
+This is a deliberately small multimodal Graph RAG. The contracts in this document
+and the baseline OpenSpec capabilities define current behavior.
 
 ## Storage boundaries
 
@@ -349,10 +349,11 @@ Before confirmation, Streamlit shows the exact versions, Chunks, Assets, Embeddi
 relations, and server files affected. A confirmed deletion creates and validates the
 next dump, then immediately rebuilds and activates the selected LadybugDB. The
 operation is reported as complete only after the replacement DB passes count and ANN
-checks. If rebuilding fails, the old active DB remains available and the UI reports
-the deletion as pending/failed rather than claiming that Chatbot no longer sees it.
+checks. Before the replacement build, existing database identities are marked stale.
+If rebuilding fails, the previous database remains retained on disk but is stale and
+cannot be selected for Chatbot; the UI reports the replacement as failed.
 
-Any other DB built from an older dump is marked stale after deletion and cannot be
+Any database built from an older dump remains stale after deletion and cannot be
 selected for Chatbot until rebuilt or explicitly handled by the operator.
 
 Physical source/media cleanup is a separate manual action. It reports references

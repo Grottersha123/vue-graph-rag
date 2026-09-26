@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-26
+goal: Keep the Makefile focused on deployment and explicit diagnostics rather
+  than embedded test workflows.

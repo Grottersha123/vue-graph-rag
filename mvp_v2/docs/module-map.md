@@ -1,114 +1,99 @@
-# Module map
+# MVP v2 module map
 
-The source tree is grouped by stable responsibility, not temporary `phase_1` folder
-names. This document maps implementation phases to the packages that own them.
+This map describes the current source tree by stable responsibility. It is a
+routing aid, not a duplicate of implementation details.
 
 ```text
-mvp_v2/src/mvp_v2/
-  domain/                    pure graph rules; no filesystem/network/database/UI
-    base.py                  IDs, hashes, strict Pydantic base types
-    graph.py                 persisted node and relation models
-    snapshot.py              typed aggregate of graph tables
-    schema_registry.py       typed core schema plus configured optional fields
-    field_extensions.py      strict optional-field config parser
-  graph_fields.json          user-editable optional node-field declarations
-    invariant_indexes.py     one-pass indexes for graph validation
-    invariants.py            cross-row graph validation
-  application/               use cases and non-persisted commands/results
-    graph_snapshot_operations/ GraphSnapshot use cases and immutable version transitions
-      deletion.py             pure deletion planning and snapshot mutation
-      document_editing.py     document metadata and title updates
-      document_view.py        document summaries and current-version views
-      ingestion.py            source ingestion preview/commit workflow
-      reference_data.py       minimal SourceType/Status bootstrap
-      relations.py            typed GraphSnapshot relation operations
-      title_backfill.py       deterministic title backfill from chunks
-    rag/agent/                chat, prompts, citations, and export workflow
-      chat.py                 ChatService and evidence-grounded answers
-      chat_export.py          Markdown chat export and provenance
-      prompts.py              Chat/MCP templates and prompt assembly
-      answer_rendering.py     strict citations and human-readable provenance
-      errors.py               chat and generation contract errors
-    dump_lifecycle/          dump, database, and publication lifecycle
-      manifests.py            current-only dump and database manifests
-      dump_restamp.py         deterministic dump manifest restamping
-      publication.py          graph, media, and version-file publication gate
-      validation.py           snapshot publication validation
-    json_encoding.py         canonical JSON bytes for signed artifacts
-    dto/                     embedding/search/deletion DTOs
-    rag/preparation/         deterministic chunks and explicit model preparation
-      chunking.py            deterministic text chunk policy
-      chunk_backfill.py      verified-source chunk preparation and maintenance
-      model_operations.py    authorized vision and embedding operations
-    rag/retrieval/           active projection and evidence retrieval
-      projection.py          deterministic current-active graph projection
-      retrieval.py           authorized local embedding search and citations
-    deletion_orchestration.py dump-first stale marking and replacement switching
-  ports/                     narrow Protocols required by application services
-  adapters/
-    csv/                     deterministic typed CSV codec
-    filesystem/
-      media.py               confined resolver for graph-referenced files
-      dumps.py               single-process immutable numbered dump writer
-    ollama.py                local vision and embedding adapter
-    ladybug.py               graph load, ANN index and retrieval
-  presentation/
-    app.py                   eight-tab Streamlit composition and click gates
-    controller.py            safe upload/config and manifest-only scan helpers
-  bootstrap/                 configuration and dependency composition
+src/mvp_v2/
+  domain/                         pure graph types, schema, indexes and invariants
+    base.py                       strict IDs, hashes and shared Pydantic base types
+    graph.py                      persisted node and relation models
+    snapshot.py                   typed graph aggregate
+    schema_registry.py            canonical graph schema
+    field_extensions.py           optional-field configuration
+    invariant_indexes.py          reusable validation indexes
+    invariants.py                 cross-row graph validation
+
+  application/                    use cases and immutable workflow contracts
+    graph_snapshot_operations/    ingestion, editing, deletion and relations
+    dump_lifecycle/               manifest, validation and publication lifecycle
+    rag/preparation/              chunking and explicit model preparation
+    rag/retrieval/                active projection and evidence retrieval
+    rag/agent/                    prompts, chat, citations and answer rendering
+    dto/                          application request/result DTOs
+    deletion_orchestration.py     dump-first deletion and replacement switching
+    ingestion_contracts.py        ingestion and model-authorization contracts
+    json_encoding.py              canonical artifact JSON encoding
+
+  ports/                          narrow protocols consumed by application services
+
+  adapters/                       external technology implementations
+    csv/                          deterministic typed CSV codec
+    filesystem/                   confined media, dump and runtime-file access
+    ingestion.py                  URL, Markdown, HTML, PDF and image extraction
+    ladybug.py                    database build, read-only access and ANN retrieval
+    ollama.py                     bounded local Ollama transport and model adapter
+
+  streamlit_ui/                   local operator UI and safe click-gated workflows
+    app.py                        tab composition and session orchestration
+    controller.py                 upload, path and manifest boundary adapters
+    logging.py                    local UI logging configuration
+
+  backend/                        authenticated local FastAPI gateway
+    app.py                        routes, authentication and exception boundary
+    contracts.py                  strict HTTP DTOs
+    service.py                    chat/profile/feedback application service
+    runtime.py                    settings-based dependency composition
+    profiles.py                   Redis-backed prompt profile selection
+    audit.py                      structured gateway JSONL events
+
+  telegram_bot/                   Telegram polling transport adapter
+    app.py                        commands, questions and feedback handlers
+    client.py                     authenticated backend HTTP client
+    state.py                      pending-feedback state
+    audit.py                      Telegram JSONL events
+    runner.py                     aiogram composition and polling lifecycle
+
+  analytics/                      offline DuckDB analysis of gateway JSONL streams
+  bootstrap/                      explicit composition and vector provisioning
+  graph_fields.json               optional node-field declarations
 ```
 
-Tests mirror these responsibilities under `mvp_v2/tests/`.
+Top-level runtime entry points:
 
-## Phase ownership
+- `streamlit_app.py` starts the local Streamlit UI;
+- `python -m mvp_v2.backend` starts the FastAPI gateway;
+- `python -m mvp_v2.telegram_bot` starts Telegram polling;
+- `notebooks/rag_batch_debug.ipynb` runs production retrieval/chat batch diagnostics.
 
-| Phase | Primary modules | Main agent role |
-|---|---|---|
-| 1. Pydantic contract | `domain/base.py`, `domain/graph.py`, `domain/snapshot.py`, `domain/schema_registry.py`, `application/dump_lifecycle/manifests.py`, `application/dto/` | Python implementer |
-| 2. CSV and validation | `adapters/csv/`, `domain/invariants.py`, dump application service | Python implementer |
-| 3. Current dump publication | `adapters/csv/`, `adapters/filesystem/dumps.py`, publication service | Python implementer |
-| 4. Text ingestion | `domain/chunking.py`, ingestion service, document adapters | Python implementer |
-| 5. Images and vision | filesystem adapter, vision port, `adapters/ollama/vision.py`, asset service | AI implementer |
-| 6. Embeddings | embedding port, planning/service, `adapters/ollama/embedding.py` | AI implementer |
-| 7. Ladybug and search | `adapters/ladybug.py`, search service | Python + AI implementers |
-| 8. Deletion | pure deletion planner and publication service | Python implementer |
-| 9. Local Chatbot and UI | `adapters/ollama.py`, Chatbot service, `presentation/app.py, presentation/controller.py`, `bootstrap/` | AI + Python implementers |
-| 10. Release checks | mirrored tests and opt-in integration probes | Python + AI reviewers |
+Tests mirror these responsibilities under `tests/`. Gateway-focused tests live under
+`tests/backend/` plus the gateway storage and integration contract files at the test
+root.
 
 ## Dependency direction
 
 ```text
-presentation/bootstrap -> application -> domain
-                              |
-                              v
-                            ports <- adapters
+streamlit_ui/backend/bootstrap -> application -> domain
+              |                       |
+              v                       v
+           adapters --------------> ports
+
+telegram_bot -> authenticated backend HTTP API
+analytics    -> local gateway JSONL files
 ```
 
-Domain modules never import Streamlit, CSV, filesystem, Ollama, or Ladybug. Adapters
-do not define business policy. Ollama is the only Chatbot provider in the first
-release and there is no cloud fallback.
+Domain modules do not import Streamlit, FastAPI, Telegram, filesystem, Ollama, or
+Ladybug. Application services depend on narrow ports. Adapters implement external
+I/O. Entry-point packages own configuration and composition.
 
-## Consolidated ingestion/model delivery
+## Data boundaries
 
-- `application/graph_snapshot_operations/reference_data.py`: explicit minimal current-schema SourceType/Status bootstrap.
-- `application/ingestion_contracts.py`: preview/commit and explicit model authorization DTOs.
-- `application/graph_snapshot_operations/ingestion.py`: ingestion preview/commit and immutable version transitions.
-- `application/rag/preparation/`: deterministic chunks and explicit model preparation.
-- `application/rag/preparation/model_operations.py`: local vision updates and missing/all embedding policy.
-- `ports/ingestion.py`, `ports/models.py`: narrow input, file, vision, embedding, and later-chat generation ports.
-- `adapters/ingestion.py`: UTF-8/HTML/PDF CLI/image extraction.
-- `adapters/filesystem/runtime_store.py`: confined temp-file/rename writes.
-- `adapters/ollama.py`: bounded local-only HTTP and response parsing.
-
-- `application/rag/retrieval/projection.py`: deterministic current-active one-space database projection.
-- `adapters/ladybug.py`: lazy Ladybug build and fixed-index ANN adapter (`LOAD`, never install).
-- `application/rag/retrieval/retrieval.py`: authorized local embedding search and typed citation hydration.
-- `application/graph_snapshot_operations/deletion.py`: pure preview/apply cascade and version promotion policy.
-- `application/deletion_orchestration.py`: dump-first stale marking and replacement switching.
-- `application/dump_lifecycle/`: manifests, restamping, validation, and publication.
-- `presentation/controller.py`: upload limits/cleanup, exact snapshot/dump binding, and UI deletion adapters.
-- `bootstrap/provision_vector.py`: explicit, confirmed external extension provisioning only.
-
-## Debug notebook
-
-- `notebooks/rag_batch_debug.ipynb`: editable 20-case batch runner over the production retrieval/chat path with full local trace export.
+- `runtime/mvp_data/` is mutable operator workspace data.
+- `runtime/dumps/dump-NNNNNN/` is an immutable validated CSV snapshot.
+- `runtime/databases/<name>.lbdb/` is an immutable query artifact containing
+  `database.lbug` and `_mvp_v2_manifest.json`.
+- Redis contains mutable prompt-profile and feedback state.
+- Gateway JSONL streams are local diagnostic data and may contain sensitive prompts
+  or bounded tracebacks.
+- Database builds and vector provisioning are explicit operations; normal read paths
+  do not ingest, build, install extensions, or mutate database artifacts.

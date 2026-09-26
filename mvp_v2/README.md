@@ -2,9 +2,11 @@
 
 Local single-user multimodal Graph RAG with a strict, versioned graph contract.
 
+- Local setup: [`setup-project.md`](setup-project.md)
 - Canonical schema: [`docs/schema.md`](docs/schema.md)
-- Implementation plan: [`docs/implementation-plan.md`](docs/implementation-plan.md)
+- Implementation history: [`docs/implementation-plan.md`](docs/implementation-plan.md)
 - Package map: [`docs/module-map.md`](docs/module-map.md)
+- Token-efficient OpenSpec workflow: [`docs/openspec-token-efficient-workflow.md`](docs/openspec-token-efficient-workflow.md)
 
 ## Local runtime workflow
 
@@ -14,7 +16,12 @@ session snapshot -> mvp_v2/runtime/dumps/dump-NNNNNN/
 mvp_v2/runtime/dumps/ -> mvp_v2/runtime/databases/
 ```
 
-The folder name `runtime/mvp_data` is retained as the configured working root, but no legacy importer remains. Do not copy or load old `mvp/mvp_data` CSV trees. The application accepts only current `mvp-v2-graph-v2` artifacts with exactly 22 canonical CSV tables and the current schema-profile SHA-256. Graph-v1/21-table dumps, legacy Asset headers (`caption`, `llm_description`), and persisted Embedding `purpose` columns are rejected.
+`runtime/mvp_data` is the current mutable workspace. The sibling legacy project
+`../mvp/` is not a package, build, runtime, or data dependency of `mvp_v2`; do not
+copy its CSV trees into the current workspace. The application accepts only current
+`mvp-v2-graph-v2` artifacts with exactly 22 canonical CSV tables and the current
+schema-profile SHA-256. Graph-v1/21-table dumps, legacy Asset headers (`caption`,
+`llm_description`), and persisted Embedding `purpose` columns are rejected.
 
 `FilesystemDumpRepository` writes 22 canonical CSV tables and `manifest.json` to a temporary sibling, then renames it to immutable `dump-NNNNNN`. It chooses the next number after the highest valid six-digit dump directory and cleans its failed staging directory. It assumes one local Streamlit process; it has no inter-process lock. No preview copies data or publishes a dump.
 
@@ -38,6 +45,44 @@ Vector provisioning is an explicit operator-only network side effect. Run it onc
 
 Normal application code only executes `LOAD vector`; it never installs extensions. Ordinary uploads do not build a database. Only confirmed deletion orchestration may immediately build a replacement. Physical source/media files are reported, never deleted.
 
+## Read-only Ladybug Explorer
+
+Use the official [Ladybug Explorer](https://github.com/LadybugDB/explorer) to
+inspect an existing canonical artifact under `runtime/databases/`. The Makefile
+lists only real `.lbdb` directories containing both `database.lbug` and
+`_mvp_v2_manifest.json`:
+
+```console
+make explorer
+```
+
+Select a known artifact without an interactive prompt:
+
+```console
+make explorer EXPLORER_DATABASE=clean-v8-onboarding.lbdb
+```
+
+The target uses the project's `PODMAN` command (`podman` by default), adds
+`--userns=keep-id`, and opens `http://127.0.0.1:8000`. If the gateway already
+owns port 8000, choose another host port:
+
+```console
+make explorer EXPLORER_PORT=8001
+```
+
+A compatible alternative engine can still be supplied explicitly with
+`EXPLORER_ENGINE`, but Docker is not the project default.
+
+The artifact is mounted read-only and Explorer receives `MODE=READ_ONLY`, so UI
+queries cannot modify the immutable database. The container runs in the
+foreground and is removed when it stops. Override `EXPLORER_IMAGE` to use a
+pinned image tag or digest instead of the default
+`ghcr.io/ladybugdb/explorer:latest`.
+
+On macOS, `proxy already running` is a Podman `gvproxy` port-forwarding failure,
+not a database error. Confirm that the failed container is stopped, retry with a
+different `EXPLORER_PORT`, and restart `podman machine` only if a stale `gvproxy`
+listener remains. Restarting the machine stops all running Podman containers.
 
 ## Phase 9 local Streamlit UI
 
@@ -139,18 +184,17 @@ make status
 
 `make deploy` checks host tools and required `.env` keys, securely prompts for a
 missing Telegram token, generates the shared gateway token, validates Compose,
-builds the images, waits for readiness, and runs runtime and container-security
-checks. Secret files are ignored, mode `0600`, and their values are not printed.
-The verification includes a real authenticated message request, so it fails when
-embedding, retrieval, or generation is unavailable rather than trusting the
-shallow health endpoint alone.
+builds and force-recreates the services, and waits for backend readiness. Secret
+files are ignored, mode `0600`, and their values are not printed. Deployment does
+not run embedded smoke, authenticated RAG, or container-security tests. Use
+`make health`, `make diagnose-models`, and the project test suite explicitly when
+those checks are required.
 
 Useful targets are:
 
 - `make secrets` — create or validate the two secret files;
 - `make config` — validate Compose without printing resolved environment values;
 - `make health` — print the public backend health response with bounded `curl`;
-- `make verify` — rerun smoke, mount, port, authentication, secret-log, and RAG checks;
 - `make diagnose-models` — call the configured embedding and generation models
   without printing prompts, tokens, or model responses;
 - `make export-logs` — copy the five JSONL streams and the last 500 backend and

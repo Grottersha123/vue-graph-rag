@@ -1,18 +1,17 @@
 # MVP v2 implementation plan
 
-Status: active implementation plan. The canonical graph contract is `docs/schema.md`.
+Status: implemented baseline and historical delivery map. New behavior changes are
+planned through OpenSpec. The canonical graph contract is `docs/schema.md`.
 
 ## Boundaries
 
-- New code and project configuration live only under `mvp_v2/`.
-- `mvp/` data and CSV artifacts are unsupported and are not imported.
-- `mvp/streamlit_app.py` is a read-only UX reference, not code to copy blindly.
-- `agentic_mvp` is a read-only source of tested ideas and failure lessons.
-- Runtime Python lives in `/tmp/vue-graph-rag-mvp-v2/.venv`.
-- Do not read `.env`, modify the repository `.venv`, or open existing binary `.lbdb`.
-- Root `pyproject.toml` and `uv.lock` remain unchanged.
+- Code, project configuration, tests, and runtime documentation live under `mvp_v2/`.
+- Legacy repository prototypes and their data artifacts are unsupported and are not imported.
+- Runtime Python lives in `/tmp/vue-graph-rag-mvp-v2/.venv`; repository-owned `.venv` is not used or modified.
+- `.env`, secrets, database artifacts, dumps, logs, and other runtime state remain untracked.
+- Existing `.lbdb` artifacts are immutable inputs unless an explicit lifecycle operation builds a replacement.
 
-## Delivery phases
+## Delivered phases
 
 1. Pydantic v2 graph/application/manifest models and executable schema registry.
 2. Deterministic typed CSV codec, graph snapshot and invariant validator.
@@ -25,8 +24,9 @@ Status: active implementation plan. The canonical graph contract is `docs/schema
 9. Streamlit UI: Upload, Documents, Relations, Chunks & Embeddings, LadybugDB, Search, Chatbot and Errors.
 10. Offline release checks and opt-in external integration/evaluation.
 
-Each phase adds focused tests and must pass Ruff, strict mypy, and offline pytest in
-the isolated runtime before the next phase is considered complete.
+Each completed phase added focused tests and was checked with Ruff, strict mypy,
+and the relevant offline pytest scope in the isolated runtime. Future work uses a
+separate OpenSpec change with its own acceptance evidence.
 
 ## Defaults selected for implementation
 

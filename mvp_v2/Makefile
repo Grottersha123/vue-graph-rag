@@ -1,5 +1,3 @@
-
-
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
@@ -14,9 +12,14 @@ BACKEND_CONTAINER ?= $(PROJECT_NAME)_backend_1
 TELEGRAM_CONTAINER ?= $(PROJECT_NAME)_telegram_1
 REDIS_CONTAINER ?= $(PROJECT_NAME)_redis_1
 LOG_EXPORT_DIR ?= runtime/logs/gateway-export
+EXPLORER_ENGINE ?= $(PODMAN)
+EXPLORER_IMAGE ?= ghcr.io/ladybugdb/explorer:latest
+EXPLORER_PORT ?= 8000
+EXPLORER_DATABASE_ROOT ?= runtime/databases
+EXPLORER_DATABASE ?=
 REQUIRED_ENV := MVP_V2_DATABASE_NAME MVP_V2_CHAT_MODEL MVP_V2_CHAT_MODEL_VERSION TELEGRAM_ALLOWED_USER_IDS
 
-.PHONY: help tools env-check secrets secrets-check config build deploy up wait status health smoke smoke-message diagnose-models security verify logs export-logs down clean
+.PHONY: help tools env-check secrets secrets-check config build deploy up wait status health explorer diagnose-models logs export-logs down clean
 
 help: ## Show the available gateway commands.
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "%-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -67,14 +70,13 @@ config: tools env-check secrets-check ## Validate the resolved Compose configura
 build: config ## Build backend and Telegram images.
 	@$(PODMAN_COMPOSE) build
 
-deploy: tools env-check secrets ## Build, start, wait, and run all runtime/security checks.
+deploy: tools env-check secrets ## Build, start, and wait for backend readiness.
 	@$(PODMAN_COMPOSE) config >/dev/null
 	@$(PODMAN_COMPOSE) up --build --force-recreate -d
 	@$(MAKE) --no-print-directory wait
-	@$(MAKE) --no-print-directory verify
-	@echo "Gateway deployment verified"
+	@echo "Gateway deployment ready"
 
-up: deploy ## Alias for the complete verified deployment.
+up: deploy ## Alias for the deployment and readiness workflow.
 
 wait: ## Wait until the public backend health endpoint reports ready.
 	@for attempt in $$(seq 1 60); do \
@@ -90,53 +92,35 @@ health: tools ## Print the public backend health response.
 	@$(CURL) --max-time 5 -fsS "$(API_URL)/health"
 	@echo
 
-smoke: ## Check health, Redis, service DNS, authentication, users, and mounts.
-	@test "$$($(PODMAN_COMPOSE) exec redis redis-cli ping | tr -d '\r')" = "PONG" || { echo "Redis PING failed" >&2; exit 1; }
-	@$(CURL) --max-time 5 -fsS "$(API_URL)/health" | grep -q '"status":"ready"' || { echo "backend health failed" >&2; exit 1; }
-	@$(PODMAN_COMPOSE) exec telegram python -c 'import socket; socket.create_connection(("backend", 8000), 3).close(); socket.create_connection(("redis", 6379), 3).close()'
-	@code="$$($(CURL) --max-time 10 -sS -o /dev/null -w '%{http_code}' "$(API_URL)/v1/profiles")"; [[ "$${code}" = 401 ]] || { echo "unauthenticated API check returned HTTP $${code}" >&2; exit 1; }
-	@auth_file="$$(mktemp)"; trap 'rm -f "$${auth_file}"' EXIT; chmod 600 "$${auth_file}"; \
-	printf 'header = "Authorization: Bearer %s"\n' "$$(cat secrets/gateway_token)" > "$${auth_file}"; \
-	code="$$($(CURL) --max-time 10 -sS --config "$${auth_file}" -o /dev/null -w '%{http_code}' "$(API_URL)/v1/profiles")"; \
-	[[ "$${code}" = 200 ]] || { echo "authenticated profile check returned HTTP $${code}" >&2; exit 1; }
-	@$(PODMAN_COMPOSE) exec backend sh -c 'test "$$(id -u)" = 10001 && test ! -w /app/runtime/databases && test ! -e /app/runtime/dumps && test -w /var/lib/mvp-v2/gateway-logs'
-	@$(PODMAN_COMPOSE) exec telegram sh -c 'test "$$(id -u)" = 10001 && test -w /var/lib/mvp-v2/gateway-logs'
-	@echo "runtime smoke checks passed"
-
-smoke-message: ## Run one authenticated end-to-end RAG request using the first allowed Telegram ID.
-	@user_id="$$(grep -E '^TELEGRAM_ALLOWED_USER_IDS=.+' .env | head -n 1 | cut -d= -f2- | cut -d, -f1 | tr -d '[:space:]')"; \
-	[[ "$${user_id}" =~ ^[1-9][0-9]*$$ ]] || { echo "cannot derive a valid smoke Telegram user ID" >&2; exit 1; }; \
-	auth_file="$$(mktemp)"; body_file="$$(mktemp)"; response_file="$$(mktemp)"; trap 'rm -f "$${auth_file}" "$${body_file}" "$${response_file}"' EXIT; \
-	chmod 600 "$${auth_file}" "$${body_file}" "$${response_file}"; \
-	printf 'header = "Authorization: Bearer %s"\n' "$$(cat secrets/gateway_token)" > "$${auth_file}"; \
-	request_id="make-smoke-$$(date +%s)-$${RANDOM}"; \
-	printf '{"request_id":"%s","telegram_user_id":%s,"chat_id":%s,"source_message_id":1,"conversation_id":"%s","question":"Как пройти онбординг?"}' "$${request_id}" "$${user_id}" "$${user_id}" "$${user_id}" > "$${body_file}"; \
-	code="$$($(CURL) --max-time 180 -sS --config "$${auth_file}" -H 'Content-Type: application/json' --data-binary @"$${body_file}" -o "$${response_file}" -w '%{http_code}' "$(API_URL)/v1/messages")"; \
-	[[ "$${code}" = 200 ]] || { echo "end-to-end message check returned HTTP $${code}; request_id=$${request_id}" >&2; exit 1; }; \
-	echo "end-to-end message check passed: $${request_id}"
+explorer: ## Select and open an existing runtime database in read-only Ladybug Explorer.
+	@engine="$(EXPLORER_ENGINE)"; root="$(EXPLORER_DATABASE_ROOT)"; port="$(EXPLORER_PORT)"; requested="$(EXPLORER_DATABASE)"; \
+	command -v "$${engine}" >/dev/null || { echo "$${engine} is required" >&2; exit 1; }; \
+	[[ "$${port}" =~ ^[0-9]+$$ ]] && (( port >= 1 && port <= 65535 )) || { echo "EXPLORER_PORT must be between 1 and 65535" >&2; exit 1; }; \
+	[[ -d "$${root}" && ! -L "$${root}" ]] || { echo "$${root} must be a real database directory" >&2; exit 1; }; \
+	shopt -s nullglob; candidates=(); \
+	for artifact in "$${root}"/*.lbdb; do \
+		if [[ -d "$${artifact}" && ! -L "$${artifact}" && -f "$${artifact}/database.lbug" && ! -L "$${artifact}/database.lbug" && -f "$${artifact}/_mvp_v2_manifest.json" && ! -L "$${artifact}/_mvp_v2_manifest.json" ]]; then candidates+=("$${artifact}"); fi; \
+	done; \
+	(( $${#candidates[@]} > 0 )) || { echo "no canonical .lbdb artifacts found in $${root}" >&2; exit 1; }; \
+	selected=""; \
+	if [[ -n "$${requested}" ]]; then \
+		[[ "$${requested}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.lbdb$$ ]] || { echo "EXPLORER_DATABASE must be a safe .lbdb artifact name" >&2; exit 1; }; \
+		for artifact in "$${candidates[@]}"; do [[ "$$(basename "$${artifact}")" = "$${requested}" ]] && selected="$${artifact}"; done; \
+		[[ -n "$${selected}" ]] || { echo "database artifact not found or invalid: $${requested}" >&2; exit 1; }; \
+	else \
+		echo "Available LadybugDB artifacts:"; \
+		for index in "$${!candidates[@]}"; do printf '  %d) %s\n' "$$((index + 1))" "$$(basename "$${candidates[$${index}]}")"; done; \
+		read -r -p "Select database [1-$${#candidates[@]}]: " choice; \
+		[[ "$${choice}" =~ ^[0-9]+$$ ]] && (( choice >= 1 && choice <= $${#candidates[@]} )) || { echo "invalid database selection" >&2; exit 1; }; \
+		selected="$${candidates[$$((choice - 1))]}"; \
+	fi; \
+	selected="$$(cd "$${selected}" && pwd -P)"; \
+	engine_args=(); [[ "$$(basename "$${engine}")" = podman ]] && engine_args+=(--userns=keep-id); \
+	echo "Opening $$(basename "$${selected}") read-only at http://127.0.0.1:$${port} with $${engine}"; \
+	exec "$${engine}" run "$${engine_args[@]}" --rm --publish "127.0.0.1:$${port}:8000" --volume "$${selected}:/database:ro" --env LBUG_FILE=database.lbug --env MODE=READ_ONLY "$(EXPLORER_IMAGE)"
 
 diagnose-models: ## Test configured Ollama embedding and generation without exposing payloads.
 	@$(PODMAN_COMPOSE) exec backend python -c 'from mvp_v2.adapters.ollama import LocalHttpTransport,OllamaAdapter; from mvp_v2.backend.config import GatewaySettings; from mvp_v2.backend.runtime import load_database_manifest; settings=GatewaySettings.from_environment(); manifest=load_database_manifest(settings.database_path,settings.database_name); adapter=OllamaAdapter(LocalHttpTransport(settings.ollama_base_url,allowed_lan_hosts=settings.ollama_allowed_lan_hosts)); print("embedding model:",manifest.embedding_space.model); vectors=adapter.embed(texts=("gateway diagnostic",),model=manifest.embedding_space.model); actual=len(vectors[0]); print("embedding dimension:",actual,"expected:",manifest.embedding_space.dimension); assert actual == manifest.embedding_space.dimension, "embedding dimension mismatch"; print("chat model:",settings.chat_model); response=adapter.generate(prompt="Reply only with OK.",model=settings.chat_model); assert response.strip(), "empty generation response"; print("embedding and generation diagnostics passed")'
-
-security: ## Verify mounts, published ports, and absence of secret values in logs.
-	@for container in $(BACKEND_CONTAINER) $(TELEGRAM_CONTAINER) $(REDIS_CONTAINER); do $(PODMAN) container exists "$${container}" || { echo "$${container} is missing" >&2; exit 1; }; done
-	@backend_mounts="$$($(PODMAN) inspect $(BACKEND_CONTAINER) --format '{{range .Mounts}}{{printf "%s|%t\n" .Destination .RW}}{{end}}')"; \
-	printf '%s\n' "$${backend_mounts}" | grep -Fx '/app/runtime/databases|false' >/dev/null || { echo "database mount is not read-only" >&2; exit 1; }; \
-	if printf '%s\n' "$${backend_mounts}" | grep -Eq 'runtime/dumps|docker\.sock|podman\.sock|/\.ssh|/\.gnupg|^/home\||^/root\|'; then echo "forbidden backend mount found" >&2; exit 1; fi
-	@for container in $(TELEGRAM_CONTAINER) $(REDIS_CONTAINER); do \
-		mounts="$$($(PODMAN) inspect "$${container}" --format '{{range .Mounts}}{{printf "%s\n" .Destination}}{{end}}')"; \
-		if printf '%s\n' "$${mounts}" | grep -Eq 'runtime/databases|runtime/dumps|docker\.sock|podman\.sock|/\.ssh|/\.gnupg|^/home$$|^/root$$'; then echo "forbidden mount found in $${container}" >&2; exit 1; fi; \
-	done
-	@ports="$$($(PODMAN) port $(BACKEND_CONTAINER))"; printf '%s\n' "$${ports}" | grep -Eq '127\.0\.0\.1:' || { echo "backend is not loopback-only" >&2; exit 1; }
-	@test -z "$$($(PODMAN) port $(TELEGRAM_CONTAINER) 2>/dev/null || true)" || { echo "Telegram publishes a host port" >&2; exit 1; }
-	@test -z "$$($(PODMAN) port $(REDIS_CONTAINER) 2>/dev/null || true)" || { echo "Redis publishes a host port" >&2; exit 1; }
-	@log_file="$$(mktemp)"; trap 'rm -f "$${log_file}"' EXIT; $(PODMAN_COMPOSE) logs --no-color > "$${log_file}"; \
-	if grep -F -f secrets/telegram_bot_token "$${log_file}" >/dev/null; then echo "Telegram token found in logs" >&2; exit 1; fi; \
-	if grep -F -f secrets/gateway_token "$${log_file}" >/dev/null; then echo "gateway token found in logs" >&2; exit 1; fi
-	@echo "container security checks passed"
-
-verify: smoke security smoke-message ## Run the complete runtime verification suite.
-	@echo "all gateway checks passed"
 
 logs: ## Show the last 100 Compose log lines without following.
 	@$(PODMAN_COMPOSE) logs --tail=100
