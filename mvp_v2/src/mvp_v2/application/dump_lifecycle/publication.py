@@ -43,7 +43,9 @@ class SnapshotPublicationService:
     @staticmethod
     def _verify_versions(snapshot: GraphSnapshot, resolver: MediaResolver) -> None:
         for version in snapshot.document_versions:
-            if not version.local_path:
+            # Старую (неактуальную) версию файл могут удалить: её содержимое
+            # уже в дампе, а активная проекция использует только текущие.
+            if not version.local_path or not version.is_current:
                 continue
             try:
                 result = resolver.verify(version.local_path, version.sha256)
