@@ -1,34 +1,73 @@
 # Optional graph fields
 
-`src/mvp_v2/graph_fields.json` declares optional node properties that are not part
-of the typed core schema. Restart the application after changing this file.
+`src/vue_rag/graph_fields.json` declares optional node properties outside the
+typed core schema. The application loads this file when the schema registry is
+imported, so restart long-lived processes and notebooks after changing it.
 
-Example:
+## Current declarations
+
+The current configuration extends `Document` with three curation fields:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `knowledge_kind` | `STRING` | `""` | Knowledge classification. Production values are `official_documentation` and `curated_faq`. |
+| `review_status` | `STRING` | `""` | Review state. Production retrieval requires `approved` when curation metadata is present. |
+| `reusable_as_policy` | `BOOLEAN` | `false` | Whether approved content may be reused in a generated answer. |
+
+Documents with curation metadata are eligible for production retrieval only when:
+
+```text
+knowledge_kind in {official_documentation, curated_faq}
+review_status == approved
+reusable_as_policy == true
+```
+
+Legacy records that reach retrieval without any of the three properties remain
+searchable. Current-schema CSV loading injects configured defaults, so documents in
+current dumps must populate the complete approved policy contract. An empty or
+partially populated contract does not pass the production gate.
+
+Retrieval derives `Evidence.source_kind` from these values:
+
+- `curated_faq` becomes `faq`;
+- `official_documentation` becomes `documentation`;
+- other values become `other`.
+
+An `external_id` beginning with `faq:` is retained as a compatibility fallback for
+FAQ classification. New ingestion should set `knowledge_kind` explicitly.
+
+## File contract
+
+The file has version `1` and this shape:
 
 ```json
 {
   "version": 1,
   "nodes": {
     "Document": [
-      {"name": "review_note", "type": "STRING", "default": ""},
-      {"name": "priority", "type": "INT64", "default": 0}
-    ],
-    "Embedding": [
-      {"name": "aux_vector", "type": "FLOAT_VECTOR", "default": []}
+      {"name": "knowledge_kind", "type": "STRING", "default": ""}
     ]
   }
 }
 ```
 
 Supported types are `STRING`, `INT64`, `BOOLEAN`, and `FLOAT_VECTOR`. Every field
-must have a default of the same type. `FLOAT_VECTOR` extensions are limited to nodes
-with a `dimension` property, currently `Embedding`.
+requires a default of the same type. Field names use lowercase snake case. A node
+cannot declare duplicate fields or replace a core property.
 
-The CSV writer always emits configured columns. When an older compatible CSV lacks
-a configured column, the reader injects its default. Unknown, duplicate, reordered,
-or undeclared columns remain errors. Configured values are flattened into ordinary
-CSV and LadybugDB columns; the typed domain stores them in `custom_properties`.
+Configured fields become ordinary CSV and LadybugDB columns. The typed domain keeps
+their values in `custom_properties`; callers should not depend on that internal
+sidecar representation.
 
-Core fields and relations cannot be replaced from this file. Removing or changing a
-field that already exists in a published dump can make that dump incompatible; add
-new optional fields instead.
+## Compatibility rules
+
+- The CSV writer always emits configured columns.
+- The reader injects defaults when an older otherwise-compatible CSV lacks a
+  configured column.
+- Unknown, duplicate, reordered, or undeclared columns remain errors.
+- Removing or changing a field can invalidate published dumps and databases.
+- Prefer additive fields and rebuild derived database artifacts after a schema
+  profile change.
+
+After changing the file, validate the schema in a fresh interpreter and exercise the
+real dump/database construction path. Static JSON validation alone is not enough.

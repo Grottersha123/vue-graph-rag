@@ -91,7 +91,7 @@ edge to the immediately preceding version of the same Document.
 ## Node properties
 
 Typed core properties are defined below. Additional optional scalar properties can
-be declared in `src/mvp_v2/graph_fields.json`; see `docs/graph-fields.md`.
+be declared in `src/vue_rag/graph_fields.json`; see `docs/graph-fields.md`.
 
 ### SourceType
 
