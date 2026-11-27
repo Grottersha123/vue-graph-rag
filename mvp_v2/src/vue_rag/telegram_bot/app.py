@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 import redis
@@ -14,7 +15,24 @@ from vue_rag.telegram_bot.audit import TelegramEventRecorder
 from vue_rag.telegram_bot.client import HttpBackendClient, TelegramGatewayError
 from vue_rag.telegram_bot.feedback import TelegramFeedbackController
 from vue_rag.telegram_bot.keyboards import feedback_keyboard, profile_keyboard
-from vue_rag.telegram_bot.state import RedisFeedbackState
+from vue_rag.telegram_bot.state import ConversationState, RedisFeedbackState
+
+_LOGGER = logging.getLogger("vue_rag.telegram.controller")
+
+
+class ActiveConversationState:
+    async def mark_active(self, telegram_user_id: int) -> bool:
+        return False
+
+    async def claim_profile_selection(
+        self, telegram_user_id: int, profile_id: str
+    ) -> bool:
+        return True
+
+    async def release_profile_selection(
+        self, telegram_user_id: int, profile_id: str
+    ) -> None:
+        return None
 
 
 class TelegramController:
@@ -25,6 +43,7 @@ class TelegramController:
         state: RedisFeedbackState,
         audit: TelegramAudit,
         allowed_user_ids: frozenset[int],
+        conversation_state: ConversationState | None = None,
     ) -> None:
         self._backend = backend
         self._events = TelegramEventRecorder(audit)
@@ -35,6 +54,7 @@ class TelegramController:
             allowed_user_ids=allowed_user_ids,
         )
         self._allowed_user_ids = allowed_user_ids
+        self._conversation_state = conversation_state or ActiveConversationState()
 
     @property
     def feedback(self) -> TelegramFeedbackController:
@@ -66,9 +86,22 @@ class TelegramController:
                 delivery_status="skipped",
             )
             return
-        await message.answer(
-            "Отправьте текстовый вопрос. Используйте /profiles, чтобы выбрать профиль."
-        )
+        try:
+            await self._conversation_state.mark_active(sender.id)
+            await message.answer(
+                "Здравствуйте! Отправьте текстовый вопрос. "
+                "Используйте /profiles, чтобы выбрать профиль."
+            )
+        except (TelegramAPIError, redis.RedisError) as error:
+            self._events.error(
+                request_id=request_id,
+                conversation_id=str(message.chat.id),
+                operation="start",
+                error_code="service_unavailable",
+                exception=error,
+            )
+            await message.answer("Сервис временно недоступен. Попробуйте позже.")
+            return
         self._events.transport(
             status="sent",
             request_id=request_id,
@@ -84,6 +117,7 @@ class TelegramController:
         if sender is None:
             return
         request_id = uuid4().hex
+        _LOGGER.debug("message received request_id=%s", request_id)
         self._events.transport(
             status="received",
             request_id=request_id,
@@ -118,6 +152,14 @@ class TelegramController:
             )
             return
         try:
+            resumed_after_inactivity = await self._conversation_state.mark_active(
+                sender.id
+            )
+            if resumed_after_inactivity:
+                await message.answer(
+                    "С возвращением! Я обработаю ваш новый вопрос. "
+                    "Профиль можно изменить командой /profiles."
+                )
             pending = await self._feedback.read(sender.id)
             if pending is not None:
                 await self._feedback.submit(pending, message.text)
@@ -144,6 +186,25 @@ class TelegramController:
                     question=message.text,
                 )
             )
+            if response.fallback_used:
+                _LOGGER.debug(
+                    "fallback notification request_id=%s provider=%s",
+                    request_id,
+                    response.provider,
+                )
+                await message.answer(
+                    "Основная модель временно недоступна. "
+                    "Ответ подготовлен резервной моделью."
+                )
+                self._events.transport(
+                    status="sent",
+                    request_id=request_id,
+                    user_id=sender.id,
+                    chat_id=message.chat.id,
+                    source_message_id=message.message_id,
+                    action="fallback_notified",
+                    delivery_status="sent",
+                )
             await message.answer(
                 response.answer,
                 reply_markup=feedback_keyboard(response.request_id),
@@ -169,6 +230,11 @@ class TelegramController:
                 operation="message",
                 error_code="service_unavailable",
                 exception=error,
+            )
+            _LOGGER.error(
+                "message failed request_id=%s error_type=%s",
+                request_id,
+                type(error).__name__,
             )
             await message.answer("Сервис временно недоступен. Попробуйте позже.")
 
@@ -242,7 +308,44 @@ class TelegramController:
             )
             return
         try:
+            claimed = await self._conversation_state.claim_profile_selection(
+                sender.id, profile_id
+            )
+        except redis.RedisError as error:
+            self._events.error(
+                request_id=request_id,
+                conversation_id=str(chat_id),
+                operation="profile_update",
+                error_code="service_unavailable",
+                exception=error,
+            )
+            await callback.answer("Не удалось изменить профиль.", show_alert=True)
+            return
+        if not claimed:
+            await callback.answer("Профиль уже выбран.")
+            return
+        try:
             await self._backend.select_profile(sender.id, profile_id)
+        except (TelegramGatewayError, ValueError) as error:
+            await self._conversation_state.release_profile_selection(
+                sender.id, profile_id
+            )
+            self._events.error(
+                request_id=request_id,
+                conversation_id=str(chat_id),
+                operation="profile_update",
+                error_code="service_unavailable",
+                exception=error,
+            )
+            await callback.answer("Не удалось изменить профиль.", show_alert=True)
+            return
+        try:
+            message = callback.message
+            if isinstance(message, Message):
+                await message.edit_text(
+                    f"Профиль «{profile_id}» выбран. Теперь отправьте вопрос.",
+                    reply_markup=None,
+                )
             await callback.answer(f"Профиль: {profile_id}")
             self._events.transport(
                 status="sent",
@@ -253,15 +356,14 @@ class TelegramController:
                 action="profile_updated",
                 delivery_status="sent",
             )
-        except (TelegramGatewayError, TelegramAPIError) as error:
+        except TelegramAPIError as error:
             self._events.error(
                 request_id=request_id,
                 conversation_id=str(chat_id),
-                operation="profile_update",
-                error_code="service_unavailable",
+                operation="profile_confirmation",
+                error_code="delivery_failed",
                 exception=error,
             )
-            await callback.answer("Не удалось изменить профиль.", show_alert=True)
 
 
 def build_dispatcher(controller: TelegramController) -> Dispatcher:

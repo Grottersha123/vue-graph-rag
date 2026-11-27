@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from vue_rag.domain.base import ContractModel
+from vue_rag.ports.models import FallbackReason
 
 TelegramUserId = Annotated[int, Field(strict=True, ge=1)]
 TelegramChatId = Annotated[int, Field(strict=True)]
@@ -51,6 +52,9 @@ class MessageResponse(ContractModel):
     profile_id: ProfileId
     prompt_version: str
     duration_ms: Annotated[int, Field(strict=True, ge=0)]
+    provider: str | None = None
+    fallback_used: bool = False
+    fallback_reason: FallbackReason | None = None
 
 
 class ProfileSummary(ContractModel):

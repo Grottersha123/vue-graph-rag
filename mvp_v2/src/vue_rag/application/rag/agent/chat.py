@@ -16,7 +16,7 @@ from vue_rag.application.rag.agent.prompts import (
     build_chat_prompt,
     build_citation_retry_prompt,
 )
-from vue_rag.ports.models import TextGenerationModel
+from vue_rag.ports.models import GenerationProvider, GenerationResult
 
 NOT_ENOUGH_EVIDENCE: Final = (
     "Мне пока не хватает подтверждённой информации, чтобы надёжно ответить. "
@@ -33,7 +33,7 @@ class ChatService:
     def __init__(
         self,
         search: EvidenceSearch,
-        model: TextGenerationModel,
+        model: GenerationProvider,
         *,
         max_question_chars: int = 2_000,
         max_evidence_items: int = MAX_EVIDENCE_ITEMS,
@@ -72,20 +72,16 @@ class ChatService:
         ):
             raise ChatError("explicit generation authorization is required")
         prompt = self._prompt(request.question, evidence)
-        response = self._model.generate(prompt=prompt, model=request.model)
-        if not response.strip():
-            raise ChatError("local generation returned an empty response")
-        raw_answer = response.strip()
+        generation = self._model.generate(prompt=prompt, model=request.model)
+        raw_answer = self._validated_text(generation)
         if raw_answer == INSUFFICIENT_EVIDENCE_TOKEN:
             return _insufficient_evidence_answer()
         try:
             referenced = referenced_numbers(raw_answer, len(evidence))
         except ChatError:
             retry_prompt = self._citation_retry_prompt(prompt, evidence)
-            response = self._model.generate(prompt=retry_prompt, model=request.model)
-            if not response.strip():
-                raise ChatError("local generation returned an empty response") from None
-            raw_answer = response.strip()
+            generation = self._model.generate(prompt=retry_prompt, model=request.model)
+            raw_answer = self._validated_text(generation)
             if raw_answer == INSUFFICIENT_EVIDENCE_TOKEN:
                 return _insufficient_evidence_answer()
             referenced = referenced_numbers(raw_answer, len(evidence))
@@ -99,7 +95,16 @@ class ChatService:
             citations=citations,
             evidence=selected_evidence,
             generated=True,
+            provider=generation.provider,
+            fallback_used=generation.fallback_used,
+            fallback_reason=generation.fallback_reason,
         )
+
+    @staticmethod
+    def _validated_text(generation: GenerationResult) -> str:
+        if not generation.text.strip():
+            raise ChatError("generation provider returned an empty response")
+        return generation.text.strip()
 
     def _prompt(self, question: str, evidence: tuple[Evidence, ...]) -> str:
         return build_chat_prompt(

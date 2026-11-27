@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -35,6 +36,8 @@ from vue_rag.backend.profiles import (
     ProfileStore,
     ProfileStoreUnavailableError,
 )
+
+_LOGGER = logging.getLogger("vue_rag.backend.gateway")
 
 
 class ChatAnswerer(Protocol):
@@ -206,6 +209,11 @@ class GatewayChatService:
 
     def handle(self, request: MessageRequest) -> MessageResponse:
         started_ns = time.monotonic_ns()
+        _LOGGER.debug(
+            "request received request_id=%s conversation_id=%s operation=message",
+            request.request_id,
+            request.conversation_id,
+        )
         try:
             self._authorize(request.telegram_user_id)
             template = self._resolve_profile(request)
@@ -232,6 +240,11 @@ class GatewayChatService:
         except Exception as error:
             self._record_error(request, "message", "service_unavailable", error)
             self._record_backend(request, started_ns, "error", profile=template)
+            _LOGGER.error(
+                "request failed request_id=%s operation=message error_type=%s",
+                request.request_id,
+                type(error).__name__,
+            )
             raise GatewayUnavailableError("chat service is unavailable") from error
         response = MessageResponse(
             request_id=request.request_id,
@@ -240,6 +253,9 @@ class GatewayChatService:
             profile_id=template.name,
             prompt_version=template.name,
             duration_ms=self._duration_ms(started_ns),
+            provider=answer.provider,
+            fallback_used=answer.fallback_used,
+            fallback_reason=answer.fallback_reason,
         )
         self._record_backend(
             request,
@@ -252,6 +268,12 @@ class GatewayChatService:
             request.request_id,
             request.telegram_user_id,
             request.conversation_id,
+        )
+        _LOGGER.debug(
+            "request completed request_id=%s provider=%s fallback_used=%s",
+            request.request_id,
+            answer.provider,
+            answer.fallback_used,
         )
         return response
 
@@ -378,6 +400,11 @@ class GatewayChatService:
                     "evidence_ids": ()
                     if answer is None
                     else tuple(item.embedding_id for item in answer.evidence),
+                    "provider_id": None if answer is None else answer.provider,
+                    "fallback_used": False if answer is None else answer.fallback_used,
+                    "fallback_reason": None
+                    if answer is None
+                    else answer.fallback_reason,
                 }
             )
         )

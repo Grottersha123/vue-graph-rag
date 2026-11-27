@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 
@@ -39,12 +40,20 @@ def required_secret(values: Mapping[str, str], name: str) -> str:
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
+    return bounded_positive_int(values, name, default, maximum=None)
+
+
+def bounded_positive_int(
+    values: Mapping[str, str], name: str, default: int, maximum: int | None
+) -> int:
     try:
         value = int(values.get(name, str(default)))
     except ValueError as error:
         raise ConfigurationError(f"{name} must be an integer") from error
     if value < 1:
         raise ConfigurationError(f"{name} must be positive")
+    if maximum is not None and value > maximum:
+        raise ConfigurationError(f"{name} cannot exceed {maximum}")
     return value
 
 
@@ -96,6 +105,54 @@ def _database_name(value: str) -> str:
     return value
 
 
+LogLevel = Literal["ERROR", "DEBUG"]
+
+
+def parse_log_level(values: Mapping[str, str]) -> LogLevel:
+    value = values.get("MVP_V2_LOG_LEVEL", "ERROR").strip().upper()
+    if value not in {"ERROR", "DEBUG"}:
+        raise ConfigurationError("MVP_V2_LOG_LEVEL must be ERROR or DEBUG")
+    return cast(LogLevel, value)
+
+
+def _optional_selora_configuration(
+    values: Mapping[str, str],
+) -> tuple[str | None, str | None, str | None]:
+    url = values.get("MVP_V2_SELORA_URL", "").strip()
+    model = values.get("MVP_V2_SELORA_MODEL", "").strip()
+    key_is_configured = bool(
+        values.get("MVP_V2_SELORA_API_KEY", "").strip()
+        or values.get("MVP_V2_SELORA_API_KEY_FILE", "").strip()
+    )
+    if not url and not model and not key_is_configured:
+        return None, None, None
+    if not url or not model:
+        raise ConfigurationError(
+            "MVP_V2_SELORA_URL and MVP_V2_SELORA_MODEL are required with Selora key"
+        )
+    api_key = required_secret(values, "MVP_V2_SELORA_API_KEY")
+    parsed = urlsplit(url)
+    is_loopback_http = parsed.scheme == "http" and parsed.hostname in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+    if (
+        (parsed.scheme != "https" and not is_loopback_http)
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigurationError(
+            "MVP_V2_SELORA_URL must be an HTTPS or loopback HTTP origin "
+            "without credentials, query, or fragment"
+        )
+    return url.rstrip("/"), api_key, model
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GatewaySettings:
     database_name: str
@@ -115,6 +172,10 @@ class GatewaySettings:
     evidence_limit: int = 8
     minimum_score: float = 0.55
     ollama_timeout_seconds: float = 120.0
+    log_level: LogLevel = "ERROR"
+    selora_url: str | None = None
+    selora_api_key: str | None = field(default=None, repr=False)
+    selora_model: str | None = None
 
     @property
     def database_path(self) -> Path:
@@ -143,6 +204,9 @@ class GatewaySettings:
         total_concurrency = _positive_int(source, "MVP_V2_TOTAL_CONCURRENCY", 6)
         if total_concurrency > 6:
             raise ConfigurationError("MVP_V2_TOTAL_CONCURRENCY cannot exceed 6")
+        selora_url, selora_api_key, selora_model = _optional_selora_configuration(
+            source
+        )
         backend_token = required_secret(source, "MVP_V2_BACKEND_TOKEN")
         if len(backend_token) < 32:
             raise ConfigurationError(
@@ -171,9 +235,15 @@ class GatewaySettings:
             api_port=_positive_int(source, "MVP_V2_API_PORT", 8000),
             total_concurrency=total_concurrency,
             model_concurrency=_positive_int(source, "MVP_V2_MODEL_CONCURRENCY", 2),
-            evidence_limit=_positive_int(source, "MVP_V2_EVIDENCE_LIMIT", 8),
+            evidence_limit=bounded_positive_int(
+                source, "MVP_V2_EVIDENCE_LIMIT", 8, maximum=8
+            ),
             minimum_score=minimum_score,
             ollama_timeout_seconds=_bounded_positive_float(
                 source, "MVP_V2_OLLAMA_TIMEOUT_SECONDS", 120.0, 600.0
             ),
+            log_level=parse_log_level(source),
+            selora_url=selora_url,
+            selora_api_key=selora_api_key,
+            selora_model=selora_model,
         )

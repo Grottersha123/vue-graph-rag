@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import redis
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from vue_rag.backend.contracts import FeedbackRequest
 from vue_rag.telegram_bot.audit import TelegramEventRecorder
@@ -236,14 +236,31 @@ class TelegramFeedbackController:
                 related_request_id=related_request_id,
             )
             return
-        await callback.answer("Оценка пропущена")
-        self._events.transport(
-            status="sent",
-            request_id=update_id,
-            user_id=callback.from_user.id,
-            chat_id=chat_id,
-            source_message_id=source_message_id,
-            action="feedback_skip_acknowledged",
-            delivery_status="sent",
-            related_request_id=related_request_id,
-        )
+        try:
+            await self._state.delete(callback.from_user.id)
+            await callback.answer("Оценка пропущена")
+            message = callback.message
+            if isinstance(message, Message):
+                await message.edit_reply_markup(reply_markup=None)
+                await message.answer(
+                    "Оценка пропущена. Задайте следующий вопрос, когда будете готовы."
+                )
+            self._events.transport(
+                status="sent",
+                request_id=update_id,
+                user_id=callback.from_user.id,
+                chat_id=chat_id,
+                source_message_id=source_message_id,
+                action="feedback_skip_acknowledged",
+                delivery_status="sent",
+                related_request_id=related_request_id,
+            )
+        except (TelegramAPIError, redis.RedisError) as error:
+            self._events.error(
+                request_id=update_id,
+                conversation_id=str(chat_id),
+                operation="feedback_skip",
+                error_code="service_unavailable",
+                exception=error,
+            )
+            await callback.answer("Не удалось пропустить оценку.", show_alert=True)

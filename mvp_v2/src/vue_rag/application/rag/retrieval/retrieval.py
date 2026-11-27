@@ -10,6 +10,7 @@ from vue_rag.application.dto.retrieval import (
     VectorQuery,
 )
 from vue_rag.application.dump_lifecycle.manifests import DatabaseManifest
+from vue_rag.application.rag.retrieval.safety import contains_phone_number
 from vue_rag.domain.snapshot import GraphSnapshot
 from vue_rag.ports.ladybug import AnnPort
 from vue_rag.ports.models import EmbeddingModel
@@ -114,6 +115,8 @@ class SearchService:
             if hit.score < request.minimum_score:
                 continue
             item = self._hydrator.hydrate(hit)
+            if contains_phone_number(item.text):
+                continue
             existing = next(
                 (e for e in evidence if e.version_id == item.version_id), None
             )
@@ -215,8 +218,10 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
     knowledge_kind = str(properties.get("knowledge_kind", ""))
     external_id = document.external_id
     source_kind: Literal["faq", "documentation", "other"] = (
-        "faq" if knowledge_kind == "curated_faq" or external_id.startswith("faq:")
-        else "documentation" if knowledge_kind == "official_documentation"
+        "faq"
+        if knowledge_kind == "curated_faq" or external_id.startswith("faq:")
+        else "documentation"
+        if knowledge_kind == "official_documentation"
         else "other"
     )
     source_ids = {x.id: x.code for x in snapshot.source_types}
@@ -279,8 +284,7 @@ def _hydrate(snapshot: GraphSnapshot, hit: VectorHit) -> Evidence:
 
 def _is_production_policy_document(document: object) -> bool:
     properties = {
-        item.name: item.value
-        for item in getattr(document, "custom_properties", ())
+        item.name: item.value for item in getattr(document, "custom_properties", ())
     }
     kind = properties.get("knowledge_kind")
     status = properties.get("review_status")
