@@ -12,6 +12,7 @@ import redis
 
 from vue_rag.adapters.ladybug import LadybugAnn, LadybugEvidenceHydrator
 from vue_rag.adapters.ollama import LocalHttpTransport, OllamaAdapter
+from vue_rag.adapters.selora import HttpxSeloraTransport, SeloraAdapter
 from vue_rag.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DatabaseManifest,
@@ -19,6 +20,10 @@ from vue_rag.application.dump_lifecycle.manifests import (
 from vue_rag.application.json_encoding import canonical_json_bytes
 from vue_rag.application.rag.agent.chat import ChatService
 from vue_rag.application.rag.agent.prompts import PROMPT_TEMPLATES
+from vue_rag.application.rag.providers import (
+    FallbackGenerationProvider,
+    NamedGenerationProvider,
+)
 from vue_rag.application.rag.retrieval.retrieval import (
     SearchExecutionLock,
     SearchService,
@@ -37,6 +42,7 @@ from vue_rag.domain.schema_registry import (
     RELATION_TABLE_NAMES,
     SCHEMA_PROFILE_SHA256,
 )
+from vue_rag.ports.models import GenerationProvider
 
 
 class ReadinessProbe(Protocol):
@@ -201,7 +207,25 @@ def build_runtime(settings: GatewaySettings) -> GatewayRuntime:
             allowed_lan_hosts=settings.ollama_allowed_lan_hosts,
         )
     )
-    traced_generation = TracingGenerationModel(adapter, audit.prompt_writer)
+    fallback_generation = NamedGenerationProvider(adapter, "gemma")
+    generation: GenerationProvider = fallback_generation
+    if (
+        settings.selora_url is not None
+        and settings.selora_api_key is not None
+        and settings.selora_model is not None
+    ):
+        primary_generation = NamedGenerationProvider(
+            SeloraAdapter(
+                HttpxSeloraTransport(
+                    settings.selora_url,
+                    settings.selora_api_key,
+                ),
+                settings.selora_model,
+            ),
+            "selora",
+        )
+        generation = FallbackGenerationProvider(primary_generation, fallback_generation)
+    traced_generation = TracingGenerationModel(generation, audit.prompt_writer)
     ladybug_home = Path(
         os.environ.get("MVP_V2_LADYBUG_HOME", "/tmp/mvp-v2-ladybug-home")
     )
@@ -227,6 +251,7 @@ def build_runtime(settings: GatewaySettings) -> GatewayRuntime:
         profile_id: ChatService(
             search,
             traced_generation,
+            max_evidence_items=settings.evidence_limit,
             prompt_template=template,
         )
         for profile_id, template in PROMPT_TEMPLATES.items()

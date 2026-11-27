@@ -12,6 +12,7 @@ from vue_rag.domain.base import (
     NonBlankText,
     RequiredMultilineText,
 )
+from vue_rag.ports.models import FallbackReason
 
 
 class ChatRequest(ContractModel):
@@ -48,3 +49,14 @@ class ChatAnswer(ContractModel):
     citations: tuple[Citation, ...]
     evidence: tuple[Evidence, ...]
     generated: bool
+    provider: str | None = None
+    fallback_used: bool = False
+    fallback_reason: FallbackReason | None = None
+
+    @model_validator(mode="after")
+    def provider_status_is_consistent(self) -> ChatAnswer:
+        if self.generated and self.provider is None:
+            raise ValueError("generated answers require provider identity")
+        if self.fallback_used != (self.fallback_reason is not None):
+            raise ValueError("fallback status and reason must be consistent")
+        return self

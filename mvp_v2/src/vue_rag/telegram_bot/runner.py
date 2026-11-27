@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import cast
 
 import httpx
@@ -8,10 +9,16 @@ import redis.asyncio as redis
 from aiogram import Bot
 
 from vue_rag.backend.audit import TelegramAudit
+from vue_rag.runtime_logging import configure_runtime_logging
 from vue_rag.telegram_bot.app import TelegramController, build_dispatcher
 from vue_rag.telegram_bot.client import HttpBackendClient
 from vue_rag.telegram_bot.config import TelegramSettings
-from vue_rag.telegram_bot.state import FeedbackRedis, RedisFeedbackState
+from vue_rag.telegram_bot.state import (
+    ConversationRedis,
+    FeedbackRedis,
+    RedisConversationState,
+    RedisFeedbackState,
+)
 
 
 async def run_polling(settings: TelegramSettings) -> None:
@@ -34,6 +41,10 @@ async def run_polling(settings: TelegramSettings) -> None:
             ),
             audit=audit,
             allowed_user_ids=settings.allowed_user_ids,
+            conversation_state=RedisConversationState(
+                cast(ConversationRedis, redis_client),
+                settings.session_inactivity_seconds,
+            ),
         )
         bot = Bot(token=settings.bot_token)
         try:
@@ -44,4 +55,11 @@ async def run_polling(settings: TelegramSettings) -> None:
 
 
 def main() -> None:
-    asyncio.run(run_polling(TelegramSettings.from_environment()))
+    settings = TelegramSettings.from_environment()
+    configure_runtime_logging(
+        settings.log_level,
+        component="vue_rag.telegram",
+        secrets=(settings.bot_token, settings.backend_token),
+    )
+    logging.getLogger("vue_rag.telegram").debug("telegram polling starting")
+    asyncio.run(run_polling(settings))

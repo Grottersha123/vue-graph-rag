@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import fcntl
 import hashlib
 import os
@@ -11,12 +12,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Final, Literal, Protocol
+from typing import Annotated, Final, Literal
 from uuid import uuid4
 
 from pydantic import Field, ValidationError
 
 from vue_rag.domain.base import ContractModel, UtcDateTime
+from vue_rag.ports.models import GenerationProvider, GenerationResult
+from vue_rag.redaction import redact_text
 
 SCHEMA_VERSION: Final = 1
 MAX_ERROR_CHARS: Final = 2_048
@@ -55,6 +58,9 @@ class BackendEvent(EventEnvelope):
     latency_ms: Annotated[int, Field(strict=True, ge=0)]
     retrieval_count: Annotated[int, Field(strict=True, ge=0)]
     evidence_ids: tuple[str, ...]
+    provider_id: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
 
 
 class TelegramEvent(EventEnvelope):
@@ -84,10 +90,12 @@ def exception_diagnostics(
 ) -> tuple[str | None, str | None]:
     if exception is None:
         return None, None
-    error = f"{type(exception).__name__}: {exception}"[:MAX_ERROR_CHARS]
-    formatted = "".join(
-        traceback_module.format_exception(
-            type(exception), exception, exception.__traceback__
+    error = redact_text(f"{type(exception).__name__}: {exception}")[:MAX_ERROR_CHARS]
+    formatted = redact_text(
+        "".join(
+            traceback_module.format_exception(
+                type(exception), exception, exception.__traceback__
+            )
         )
     )
     return error, formatted[-MAX_TRACEBACK_CHARS:]
@@ -299,10 +307,6 @@ class TelegramAudit:
         self.error_writer.prepare()
 
 
-class TextGenerationModel(Protocol):
-    def generate(self, *, prompt: str, model: str) -> str: ...
-
-
 class PromptTraceContext(ContractModel):
     request_id: str
     conversation_id: str
@@ -334,11 +338,11 @@ class PromptTraceBinder:
 
 
 class TracingGenerationModel:
-    def __init__(self, model: TextGenerationModel, writer: JsonlAuditWriter) -> None:
+    def __init__(self, model: GenerationProvider, writer: JsonlAuditWriter) -> None:
         self._model = model
         self._writer = writer
 
-    def generate(self, *, prompt: str, model: str) -> str:
+    def generate(self, *, prompt: str, model: str) -> GenerationResult:
         context = _TRACE_CONTEXT.get()
         if context is None:
             raise RuntimeError("prompt trace context is missing")
@@ -350,7 +354,7 @@ class TracingGenerationModel:
             self._capture(context, prompt, attempt, "failed")
             raise
         self._capture(context, prompt, attempt, "captured")
-        return response
+        return dataclasses.replace(response, request_id=context.request_id)
 
     def _capture(
         self,
@@ -359,6 +363,7 @@ class TracingGenerationModel:
         attempt: int,
         status: Literal["captured", "failed"],
     ) -> None:
+        safe_prompt = redact_text(prompt)
         self._writer.append(
             PromptTraceEvent.model_validate(
                 {
@@ -375,8 +380,10 @@ class TracingGenerationModel:
                     "database_name": context.database_name,
                     "database_build_id": context.database_build_id,
                     "graph_schema_version": context.graph_schema_version,
-                    "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-                    "rendered_prompt": prompt,
+                    "prompt_hash": hashlib.sha256(
+                        safe_prompt.encode("utf-8")
+                    ).hexdigest(),
+                    "rendered_prompt": safe_prompt,
                 }
             )
         )

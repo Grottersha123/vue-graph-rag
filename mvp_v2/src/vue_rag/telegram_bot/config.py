@@ -8,6 +8,9 @@ from urllib.parse import urlsplit
 
 from vue_rag.backend.config import (
     ConfigurationError,
+    LogLevel,
+    bounded_positive_int,
+    parse_log_level,
     required_secret,
     validate_local_redis_url,
 )
@@ -52,6 +55,8 @@ class TelegramSettings:
     allowed_user_ids: frozenset[int]
     request_timeout_seconds: float = 60.0
     feedback_ttl_seconds: int = 900
+    session_inactivity_seconds: int = 3_600
+    log_level: LogLevel = "ERROR"
 
     @classmethod
     def from_environment(
@@ -64,14 +69,15 @@ class TelegramSettings:
             raise ConfigurationError(
                 "MVP_V2_BACKEND_TOKEN must contain at least 32 characters"
             )
-        try:
-            ttl = int(source.get("MVP_V2_FEEDBACK_TTL_SECONDS", "900"))
-        except ValueError as error:
-            raise ConfigurationError(
-                "MVP_V2_FEEDBACK_TTL_SECONDS must be an integer"
-            ) from error
-        if ttl < 1:
-            raise ConfigurationError("MVP_V2_FEEDBACK_TTL_SECONDS must be positive")
+        feedback_ttl = bounded_positive_int(
+            source, "MVP_V2_FEEDBACK_TTL_SECONDS", 900, maximum=86_400
+        )
+        session_inactivity = bounded_positive_int(
+            source,
+            "MVP_V2_SESSION_INACTIVITY_SECONDS",
+            3_600,
+            maximum=2_592_000,
+        )
         return cls(
             bot_token=token,
             backend_token=backend_token,
@@ -85,5 +91,7 @@ class TelegramSettings:
                 source.get("MVP_V2_GATEWAY_LOG_DIRECTORY", "runtime/logs/gateway")
             ),
             allowed_user_ids=_allowed_users(source),
-            feedback_ttl_seconds=ttl,
+            feedback_ttl_seconds=feedback_ttl,
+            session_inactivity_seconds=session_inactivity,
+            log_level=parse_log_level(source),
         )

@@ -5,6 +5,7 @@ PODMAN ?= podman
 PODMAN_COMPOSE ?= podman-compose
 CURL ?= curl
 OPENSSL ?= openssl
+PYTHON ?= python3
 API_PORT ?= 8000
 API_URL ?= http://127.0.0.1:$(API_PORT)
 PROJECT_NAME ?= mvp_v2
@@ -29,6 +30,7 @@ tools: ## Verify host tools without touching a Python virtual environment.
 	@command -v $(PODMAN_COMPOSE) >/dev/null || { echo "podman-compose is required" >&2; exit 1; }
 	@command -v $(CURL) >/dev/null || { echo "curl is required" >&2; exit 1; }
 	@command -v $(OPENSSL) >/dev/null || { echo "openssl is required" >&2; exit 1; }
+	@command -v $(PYTHON) >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 env-check: ## Check required .env keys without printing their values.
 	@test -f .env || { echo ".env is missing" >&2; exit 1; }
@@ -125,13 +127,12 @@ diagnose-models: ## Test configured Ollama embedding and generation without expo
 logs: ## Show the last 100 Compose log lines without following.
 	@$(PODMAN_COMPOSE) logs --tail=100
 
-export-logs: ## Copy JSONL and bounded container logs to the ignored host log directory.
-	@mkdir -p "$(LOG_EXPORT_DIR)"
-	@$(PODMAN) cp "$(BACKEND_CONTAINER):/var/lib/mvp-v2/gateway-logs/." "$(LOG_EXPORT_DIR)/"
-	@$(PODMAN) logs --tail=500 "$(BACKEND_CONTAINER)" > "$(LOG_EXPORT_DIR)/backend-container.log" 2>&1
-	@$(PODMAN) logs --tail=500 "$(TELEGRAM_CONTAINER)" > "$(LOG_EXPORT_DIR)/telegram-container.log" 2>&1
-	@chmod 600 "$(LOG_EXPORT_DIR)/backend-container.log" "$(LOG_EXPORT_DIR)/telegram-container.log"
-	@echo "gateway JSONL and container logs exported to $(LOG_EXPORT_DIR)"
+export-logs: tools ## Create a mode-0600 archive with allowlisted gateway logs.
+	@$(PYTHON) scripts/export_gateway_logs.py \
+		--podman "$(PODMAN)" \
+		--backend-container "$(BACKEND_CONTAINER)" \
+		--telegram-container "$(TELEGRAM_CONTAINER)" \
+		--output-directory "$(LOG_EXPORT_DIR)"
 
 down: ## Stop and remove Compose containers/network; preserve volumes and secrets.
 	@$(PODMAN_COMPOSE) down
