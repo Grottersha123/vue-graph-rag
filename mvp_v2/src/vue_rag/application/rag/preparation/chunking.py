@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
 from vue_rag.domain.base import stable_id
 from vue_rag.domain.graph import Chunk
 
@@ -32,36 +34,15 @@ def split_text(
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
         return ()
-    chunks: list[str] = []
-    start = 0
-    while start < len(normalized):
-        limit = min(start + policy.max_characters, len(normalized))
-        end = limit
-        if limit < len(normalized):
-            candidates = [
-                normalized.rfind("\n\n", start, limit),
-                normalized.rfind("\n", start, limit),
-                normalized.rfind(" ", start, limit),
-            ]
-            end = max(
-                (
-                    item
-                    for item in candidates
-                    if item >= start + policy.minimum_characters
-                ),
-                default=limit,
-            )
-        value = normalized[start:end].strip()
-        if value:
-            chunks.append(value)
-        if end == len(normalized):
-            break
-        start = max(end - policy.overlap_characters, start + 1)
-    if len(chunks) > 1 and len(chunks[-1]) < policy.minimum_characters:
-        merged = (chunks[-2] + "\n" + chunks[-1]).strip()
-        if len(merged) <= policy.max_characters:
-            chunks[-2:] = [merged]
-    return tuple(chunks)
+    splitter = RecursiveCharacterTextSplitter.from_language(
+        Language.MARKDOWN,
+        chunk_size=policy.max_characters,
+        chunk_overlap=policy.overlap_characters,
+    )
+    chunks = tuple(chunk for chunk in splitter.split_text(normalized) if chunk.strip())
+    if any(len(chunk) > policy.max_characters for chunk in chunks):
+        raise RuntimeError("Markdown splitter produced an oversized chunk")
+    return chunks
 
 
 def make_chunks(version_id: str, texts: tuple[str, ...]) -> tuple[Chunk, ...]:
