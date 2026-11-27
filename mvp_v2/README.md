@@ -99,8 +99,8 @@ Then launch through uv while keeping the environment outside the repository:
 
 ```console
 UV_PROJECT_ENVIRONMENT=/tmp/vue-graph-rag-mvp-v2/.venv \
-  uv run --project mvp_v2 --env-file mvp_v2/.env \
-  streamlit run mvp_v2/streamlit_app.py
+  uv run --project vue_rag --env-file vue_rag/.env \
+  streamlit run vue_rag/streamlit_app.py
 ```
 
 `.env` is ignored; `.env.example` is tracked and contains no secrets. `uv` loads its

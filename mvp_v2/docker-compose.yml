@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    command: ["python", "-m", "mvp_v2.backend"]
+    command: ["python", "-m", "vue_rag.backend"]
     restart: unless-stopped
     depends_on:
       redis:
@@ -74,7 +74,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    command: ["python", "-m", "mvp_v2.telegram_bot"]
+    command: ["python", "-m", "vue_rag.telegram_bot"]
     restart: unless-stopped
     depends_on:
       backend:

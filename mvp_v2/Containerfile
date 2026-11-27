@@ -22,7 +22,7 @@ RUN uv sync --frozen
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin gateway \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/mvp-v2/gateway-logs \
     && install -d -o 10001 -g 10001 -m 0700 /opt/mvp-v2/ladybug-home
-RUN python -m mvp_v2.bootstrap.provision_vector \
+RUN python -m vue_rag.bootstrap.provision_vector \
       --home /opt/mvp-v2/ladybug-home --yes \
     && chown -R 10001:10001 /opt/mvp-v2/ladybug-home
 USER gateway
