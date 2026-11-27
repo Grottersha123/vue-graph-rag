@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "nodes": {
+    "Document": [
+      {
+        "name": "knowledge_kind",
+        "type": "STRING",
+        "default": ""
+      },
+      {
+        "name": "review_status",
+        "type": "STRING",
+        "default": ""
+      },
+      {
+        "name": "reusable_as_policy",
+        "type": "BOOLEAN",
+        "default": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+"""Narrow application dependency protocols."""

@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/research/data/
+
+# MVP generated data (regenerable from CSVs)
+.DS_Store
+mvp/mvp_data/*.backup
+mvp/mvp_data/backup/
+mvp/mvp_data/documents/
+mvp/mvp_data/images/
+mvp/mvp_data/uploads/
+mvp/mvp_data/raw/
+mvp/mvp_data/vue_rag.lbdb
+mvp/mvp_data/vue_rag.lbdb.wal
+mvp/mvp_data/explorer-session.json
+mvp/mvp_data/*.log
+mvp/mvp_data/.mutation.lock
+mvp/scripts/__pycache__/
