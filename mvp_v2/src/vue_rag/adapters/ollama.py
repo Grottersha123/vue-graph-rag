@@ -133,12 +133,12 @@ class LocalHttpTransport:
             if hostname not in normalized_lan_hosts:
                 raise ValueError("Ollama LAN host requires explicit authorization")
             addresses = resolve(hostname, port)
-            # if not addresses or any(
-            #     not _is_private_address(item) for item in addresses
-            # ):
-            #     raise ValueError(
-            #         "Ollama LAN host must resolve only to private addresses"
-            #     )
+            if not addresses or any(
+                not _is_private_address(item) for item in addresses
+            ):
+                raise ValueError(
+                    "Ollama LAN host must resolve only to private addresses"
+                )
         self._hostname = hostname
         self._address = addresses[0]
         self._port = port
