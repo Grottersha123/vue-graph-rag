@@ -1,2 +1,8 @@
-# vue-graph-rag-
-Rag for small startup
+# vue-graph-rag
+
+Монорепозиторий AI-проектов.
+
+- [`mvp_v2/`](mvp_v2/) — готовый продукт на основе Graph RAG.
+- [`classifier/`](classifier/) — проект для классификации FAQ-вопросов.
+
+Основное готовое приложение и инструкции по его запуску находятся в `mvp_v2/`.

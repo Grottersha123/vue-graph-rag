@@ -232,3 +232,6 @@ mvp/mvp_data/explorer-session.json
 mvp/mvp_data/*.log
 mvp/mvp_data/.mutation.lock
 mvp/scripts/__pycache__/
+
+# Local export artifacts
+/tmp/08d36ec0_1cb5_4e36_acd4_8ce017cd055b_ExportBlock_747b0927_740a_40c7/
