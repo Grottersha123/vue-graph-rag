@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from mvp_v2.adapters import ollama
-from mvp_v2.adapters.ollama import LocalHttpTransport, OllamaAdapter, OllamaError
+from vue_rag.adapters import ollama
+from vue_rag.adapters.ollama import LocalHttpTransport, OllamaAdapter, OllamaError
 
 
 @dataclass

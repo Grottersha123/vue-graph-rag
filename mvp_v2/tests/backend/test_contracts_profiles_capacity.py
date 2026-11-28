@@ -8,22 +8,22 @@ from threading import Barrier
 import pytest
 from pydantic import ValidationError
 
-from mvp_v2.application.dto.chat import ChatAnswer, ChatRequest
-from mvp_v2.application.rag.agent.prompts import (
+from tests.backend.helpers import FakeChat, MemoryProfileStore, gateway
+from vue_rag.application.dto.chat import ChatAnswer, ChatRequest
+from vue_rag.application.rag.agent.prompts import (
     DEFAULT_PROMPT_TEMPLATE,
     MCP_PROMPT_TEMPLATES,
     PROMPT_TEMPLATES,
     PromptTemplate,
 )
-from mvp_v2.backend.config import ConfigurationError, GatewaySettings
-from mvp_v2.backend.contracts import MessageRequest
-from mvp_v2.backend.profiles import (
+from vue_rag.backend.config import ConfigurationError, GatewaySettings
+from vue_rag.backend.contracts import MessageRequest
+from vue_rag.backend.profiles import (
     ProfileRegistry,
     ProfileStoreUnavailableError,
 )
-from mvp_v2.backend.service import CapacityLimiter, GatewayOverloadedError
-from mvp_v2.telegram_bot.config import TelegramSettings
-from tests.backend.helpers import FakeChat, MemoryProfileStore, gateway
+from vue_rag.backend.service import CapacityLimiter, GatewayOverloadedError
+from vue_rag.telegram_bot.config import TelegramSettings
 
 
 def test_message_contract_requires_conversation_to_equal_chat_id() -> None:

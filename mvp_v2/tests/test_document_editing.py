@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from mvp_v2.application.graph_snapshot_operations.document_editing import (
+from tests.factories import build_valid_snapshot
+from vue_rag.application.graph_snapshot_operations.document_editing import (
     DocumentMetadataUpdate,
     rename_document,
     update_document_metadata,
 )
-from mvp_v2.application.graph_snapshot_operations.document_view import (
+from vue_rag.application.graph_snapshot_operations.document_view import (
     build_document_summaries,
 )
-from mvp_v2.domain.graph import LinksTo
-from tests.factories import build_valid_snapshot
+from vue_rag.domain.graph import LinksTo
 
 
 def test_document_summary_combines_document_and_current_version() -> None:

@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 
-from mvp_v2.domain import graph
-from mvp_v2.domain.snapshot import GraphSnapshot
+from vue_rag.domain import graph
+from vue_rag.domain.snapshot import GraphSnapshot
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, 6, tzinfo=UTC)
 SHA = "a" * 64

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from mvp_v2.application.graph_snapshot_operations.reference_data import (
+from vue_rag.application.graph_snapshot_operations.reference_data import (
     DEFAULT_SOURCE_TYPE,
     DEFAULT_STATUS,
     initialize_reference_data,
 )
-from mvp_v2.domain import graph
-from mvp_v2.domain.invariants import validate_graph
-from mvp_v2.domain.snapshot import GraphSnapshot
+from vue_rag.domain import graph
+from vue_rag.domain.invariants import validate_graph
+from vue_rag.domain.snapshot import GraphSnapshot
 
 
 def test_empty_snapshot_gets_minimal_current_reference_data() -> None:

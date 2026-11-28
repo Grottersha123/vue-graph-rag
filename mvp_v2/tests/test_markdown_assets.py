@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from mvp_v2.adapters.ingestion import ExtractionError, LocalInputExtractor
-from mvp_v2.application.ingestion_contracts import IngestionRequest
-from mvp_v2.presentation.controller import primary_upload_name, stage_uploads
+from vue_rag.adapters.ingestion import ExtractionError, LocalInputExtractor
+from vue_rag.application.ingestion_contracts import IngestionRequest
+from vue_rag.streamlit_ui.controller import primary_upload_name, stage_uploads
 
 
 @dataclass(frozen=True)
@@ -96,9 +96,7 @@ def test_markdown_rejects_excessively_long_url(tmp_path: Path) -> None:
 
 
 def test_markdown_rejects_too_many_urls(tmp_path: Path) -> None:
-    urls = "\n".join(
-        f"https://example.com/file-{position}" for position in range(257)
-    )
+    urls = "\n".join(f"https://example.com/file-{position}" for position in range(257))
     (tmp_path / "guide.md").write_text(urls)
 
     with pytest.raises(ExtractionError, match="URL preview exceeds limit"):

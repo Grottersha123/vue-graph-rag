@@ -6,38 +6,44 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from mvp_v2.adapters.ladybug import LadybugAnn
-from mvp_v2.application.dto.chat import ChatAnswer, Citation
-from mvp_v2.application.dto.retrieval import (
+from tests.factories import NOW, SHA, build_valid_snapshot
+from vue_rag.adapters.ladybug import LadybugAnn
+from vue_rag.application.dto.chat import ChatAnswer, ChatRequest, Citation
+from vue_rag.application.dto.retrieval import (
     ContextScope,
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
+    Evidence,
     SearchRequest,
     SubjectKind,
     SubjectRef,
     VectorHit,
     VectorQuery,
 )
-from mvp_v2.application.dump_lifecycle.manifests import (
+from vue_rag.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DatabaseManifest,
     TableCount,
     compute_database_build_id,
 )
-from mvp_v2.application.graph_snapshot_operations.document_view import (
+from vue_rag.application.graph_snapshot_operations.document_view import (
     build_document_view,
 )
-from mvp_v2.application.graph_snapshot_operations.title_backfill import (
+from vue_rag.application.graph_snapshot_operations.title_backfill import (
     fill_missing_document_titles,
 )
-from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
-from mvp_v2.application.rag.retrieval.retrieval import SearchService, _hydrate
-from mvp_v2.domain import graph
-from mvp_v2.domain.graph import Document
-from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
-from mvp_v2.domain.snapshot import GraphSnapshot
-from tests.factories import NOW, SHA, build_valid_snapshot
+from vue_rag.application.ingestion_contracts import ModelAuthorization
+from vue_rag.application.rag.agent.chat import MAX_EVIDENCE_ITEMS, ChatService
+from vue_rag.application.rag.retrieval.retrieval import (
+    DOCUMENT_CONTEXT_MAX_CHARS,
+    SearchService,
+    _hydrate,
+)
+from vue_rag.domain import graph
+from vue_rag.domain.graph import Document
+from vue_rag.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
+from vue_rag.domain.snapshot import GraphSnapshot
+from vue_rag.ports.models import GenerationResult
 
 
 def _chunk(identifier: str, position: int, content: str) -> graph.Chunk:
@@ -84,7 +90,7 @@ def test_hydration_uses_bounded_neighbor_window_for_large_document() -> None:
     assert evidence.context_scope == "chunk_window"
     assert evidence.matched_chunk_position == 1
     assert evidence.document_chunk_count == 4
-    assert len(evidence.text) == 1_400
+    assert len(evidence.text) == DOCUMENT_CONTEXT_MAX_CHARS
     assert "1" * 1_000 in evidence.text
 
 
@@ -109,9 +115,62 @@ class _ScriptedAnn:
 
 
 class _EchoModel:
-    def generate(self, *, prompt: str, model: str) -> str:
+    def generate(self, *, prompt: str, model: str) -> GenerationResult:
         tokens = " ".join(f"[{n}]" for n in range(1, MAX_EVIDENCE_ITEMS + 1))
-        return f"Answer {tokens}"
+        return GenerationResult(text=f"Answer {tokens}", provider="test")
+
+
+class _Search:
+    def __init__(self, items: tuple[Evidence, ...]) -> None:
+        self._items = items
+
+    def search(self, request: SearchRequest) -> tuple[Evidence, ...]:
+        return self._items
+
+
+def _evidence() -> Evidence:
+    return Evidence(
+        subject=SubjectRef(kind=SubjectKind.CHUNK, id="chunk"),
+        embedding_id="embedding",
+        score=0.9,
+        text="fact",
+        matched_chunk_position=0,
+        document_chunk_count=1,
+        context_scope="full_document",
+        document_id="document",
+        document_title="Title",
+        external_id="doc:document",
+        knowledge_kind="official_documentation",
+        source_kind="documentation",
+        source_url="",
+        version_id="version",
+        version=1,
+        local_path="documents/a.md",
+        source_type="local_file",
+        statuses=("ready",),
+        roles=("student",),
+        processes=("onboarding",),
+        linked_document_ids=(),
+    )
+
+
+def _chat_request() -> ChatRequest:
+    search = SearchRequest(
+        question="Question?",
+        space=EmbeddingSpaceIdentity(
+            provider="ollama", model="embed", model_version="v1", dimension=2
+        ),
+        purposes=(EmbeddingPurpose.CHUNK_RETRIEVAL,),
+        limit=8,
+        authorization=ModelAuthorization(allow=True, operation="embedding"),
+    )
+    return ChatRequest(
+        question="Question?",
+        search=search,
+        model="chat",
+        model_version="v1",
+        authorization=ModelAuthorization(allow=True, operation="generation"),
+    )
 
 
 SPACE = EmbeddingSpaceIdentity(
@@ -374,32 +433,28 @@ def test_search_limit_100_requests_at_least_100_ann_candidates() -> None:
 
 
 def test_chat_truncates_evidence_to_configured_maximum() -> None:
-    from tests.test_phase9_closure import Search, evidence, request
-
     items = tuple(
-        evidence().model_copy(update={"embedding_id": f"e{number}"})
+        _evidence().model_copy(update={"embedding_id": f"e{number}"})
         for number in range(10)
     )
 
-    answer = ChatService(Search(items), _EchoModel()).answer(request())
+    answer = ChatService(_Search(items), _EchoModel()).answer(_chat_request())
 
     assert len(answer.evidence) == MAX_EVIDENCE_ITEMS
 
 
 def test_output_contracts_allow_multiline_and_reject_blank_or_controls() -> None:
-    from tests.test_phase9_closure import evidence as sample_evidence
-
-    base = sample_evidence().model_dump()
-    multiline = sample_evidence().model_validate(
+    base = _evidence().model_dump()
+    multiline = _evidence().model_validate(
         {**base, "text": "line one\nline two\ttabbed"}
     )
     assert "\n" in multiline.text
     with pytest.raises(ValidationError):
-        sample_evidence().model_validate({**base, "text": ""})
+        _evidence().model_validate({**base, "text": ""})
     with pytest.raises(ValidationError):
-        sample_evidence().model_validate({**base, "text": "bad\x00text"})
+        _evidence().model_validate({**base, "text": "bad\x00text"})
 
-    valid = sample_evidence()
+    valid = _evidence()
 
     def citation(context_scope: ContextScope) -> Citation:
         return Citation(
@@ -422,7 +477,9 @@ def test_output_contracts_allow_multiline_and_reject_blank_or_controls() -> None
         citation("bogus")  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError):
-        ChatAnswer(answer="", citations=(), evidence=(), generated=True)
+        ChatAnswer(
+            answer="", citations=(), evidence=(), generated=True, provider="test"
+        )
 
 
 def test_title_backfill_renames_sha_documents_from_headings() -> None:

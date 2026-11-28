@@ -5,12 +5,31 @@ from pathlib import Path
 
 import pytest
 
-from mvp_v2.adapters.csv.snapshot import CsvSnapshotError, read_snapshot, write_snapshot
-from mvp_v2.domain.schema_registry import (
+from tests.factories import build_valid_snapshot
+from vue_rag.adapters.csv.snapshot import (
+    CsvSnapshotError,
+    read_snapshot,
+    write_snapshot,
+)
+from vue_rag.domain import graph
+from vue_rag.domain.schema_registry import (
     TABLE_NAMES,
     TABLE_SPECS,
 )
-from tests.factories import build_valid_snapshot
+from vue_rag.domain.snapshot import GraphSnapshot
+
+
+def _with_document_schema_defaults(snapshot: GraphSnapshot) -> GraphSnapshot:
+    custom_properties = (
+        graph.CustomProperty(name="knowledge_kind", value=""),
+        graph.CustomProperty(name="review_status", value=""),
+        graph.CustomProperty(name="reusable_as_policy", value=False),
+    )
+    documents = tuple(
+        document.model_copy(update={"custom_properties": custom_properties})
+        for document in snapshot.documents
+    )
+    return snapshot.model_copy(update={"documents": documents})
 
 
 def test_snapshot_round_trips_and_writes_deterministic_crlf(tmp_path: Path) -> None:
@@ -21,7 +40,7 @@ def test_snapshot_round_trips_and_writes_deterministic_crlf(tmp_path: Path) -> N
     )
     second_entries = write_snapshot(tmp_path / "second", reordered)
 
-    assert read_snapshot(tmp_path / "first") == snapshot
+    assert read_snapshot(tmp_path / "first") == _with_document_schema_defaults(snapshot)
     assert entries == second_entries
     assert tuple(entry.path for entry in entries) == tuple(
         f"tables/{name}.csv" for name in TABLE_NAMES
@@ -34,8 +53,6 @@ def test_snapshot_round_trips_and_writes_deterministic_crlf(tmp_path: Path) -> N
 
 
 def test_empty_snapshot_creates_every_table_and_manifest_fact(tmp_path: Path) -> None:
-    from mvp_v2.domain.snapshot import GraphSnapshot
-
     entries = write_snapshot(tmp_path, GraphSnapshot())
 
     assert len(entries) == len(TABLE_NAMES)
@@ -141,7 +158,7 @@ def test_reader_rejects_invalid_utf8(tmp_path: Path) -> None:
 
 
 def test_adapter_uses_registry_properties_instead_of_header_maps() -> None:
-    import mvp_v2.adapters.csv.snapshot as adapter
+    import vue_rag.adapters.csv.snapshot as adapter
 
     adapter_names = set(vars(adapter))
     assert "NODE_PROPERTIES" not in adapter_names
@@ -150,8 +167,8 @@ def test_adapter_uses_registry_properties_instead_of_header_maps() -> None:
 
 
 def test_vector_decoder_normalizes_json_integers_to_floats() -> None:
-    from mvp_v2.adapters.csv.scalars import decode_scalar
-    from mvp_v2.domain.schema_registry import ScalarType
+    from vue_rag.adapters.csv.scalars import decode_scalar
+    from vue_rag.domain.schema_registry import ScalarType
 
     assert decode_scalar("[1.0,2.5]", ScalarType.FLOAT_VECTOR) == (1.0, 2.5)
 
@@ -161,8 +178,8 @@ def test_vector_decoder_normalizes_json_integers_to_floats() -> None:
     ["[1, 2.5]", "[1,2.5]", "[1.00,2.5]", "[1e0,2.5]", "[-0,2.5]", " [1.0,2.5]"],
 )
 def test_vector_decoder_rejects_noncanonical_json(encoded: str) -> None:
-    from mvp_v2.adapters.csv.scalars import CsvScalarError, decode_scalar
-    from mvp_v2.domain.schema_registry import ScalarType
+    from vue_rag.adapters.csv.scalars import CsvScalarError, decode_scalar
+    from vue_rag.domain.schema_registry import ScalarType
 
     with pytest.raises(CsvScalarError):
         decode_scalar(encoded, ScalarType.FLOAT_VECTOR)
@@ -186,7 +203,7 @@ def test_multiline_csv_roundtrip_preserves_exact_text(tmp_path: Path) -> None:
 
     write_snapshot(tmp_path, multiline)
 
-    assert read_snapshot(tmp_path) == multiline
+    assert read_snapshot(tmp_path) == _with_document_schema_defaults(multiline)
     assert b'"comma,""quote""\n\nnext\t' in (tmp_path / "tables/Chunk.csv").read_bytes()
 
 
@@ -246,7 +263,7 @@ def test_reader_and_writer_reject_directory_symlinks(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mutation", ["line_endings", "unneeded_quotes", "row_order"])
 def test_reader_rejects_noncanonical_table_bytes(tmp_path: Path, mutation: str) -> None:
-    from mvp_v2.domain import graph
+    from vue_rag.domain import graph
 
     snapshot = build_valid_snapshot().model_copy(
         update={
@@ -276,7 +293,7 @@ def test_scalar_diagnostic_names_table_row_and_column(tmp_path: Path) -> None:
     write_snapshot(tmp_path, build_valid_snapshot())
     document_path = tmp_path / "tables/Document.csv"
     document_path.write_bytes(
-        document_path.read_bytes().replace(b",true,\r\n", b",True,\r\n")
+        document_path.read_bytes().replace(b",true,", b",True,", 1)
     )
 
     with pytest.raises(CsvSnapshotError, match=r"Document row 2 column is_active"):
@@ -306,7 +323,7 @@ def test_document_version_error_multiline_csv_roundtrip(tmp_path: Path) -> None:
 
     write_snapshot(tmp_path, multiline)
 
-    assert read_snapshot(tmp_path) == multiline
+    assert read_snapshot(tmp_path) == _with_document_schema_defaults(multiline)
 
 
 def test_failed_late_serialization_cleans_staging_and_allows_retry(

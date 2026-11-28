@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
-from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
-from mvp_v2.domain.snapshot import GraphSnapshot
-from mvp_v2.ports.media import MediaVerificationError
+from vue_rag.adapters.filesystem.dumps import FilesystemDumpRepository
+from vue_rag.adapters.filesystem.media import FilesystemMediaResolver
+from vue_rag.domain.snapshot import GraphSnapshot
+from vue_rag.ports.media import MediaVerificationError
 
 
 def test_media_resolver_rejects_symlink_and_traversal(tmp_path: Path) -> None:

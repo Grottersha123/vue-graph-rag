@@ -6,15 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.backend.config import GatewaySettings
-from mvp_v2.backend.runtime import (
+from tests.backend.helpers import manifest
+from vue_rag.application.json_encoding import canonical_json_bytes
+from vue_rag.backend.config import GatewaySettings
+from vue_rag.backend.runtime import (
     LadybugDatabaseProbe,
     build_runtime,
     load_database_manifest,
     validate_database_contents,
 )
-from tests.backend.helpers import manifest
 
 
 def _artifact(root: Path) -> Path:
@@ -142,11 +142,11 @@ def test_runtime_opens_selected_artifact_read_only_without_dump_dependency(
     fake_module = SimpleNamespace(Database=_Database, Connection=_Connection)
     monkeypatch.setenv("MVP_V2_LADYBUG_HOME", str(home))
     monkeypatch.setattr(
-        "mvp_v2.backend.runtime.redis.Redis.from_url",
+        "vue_rag.backend.runtime.redis.Redis.from_url",
         lambda *args, **kwargs: _Redis(),
     )
     monkeypatch.setattr(
-        "mvp_v2.backend.runtime.importlib.import_module", lambda name: fake_module
+        "vue_rag.backend.runtime.importlib.import_module", lambda name: fake_module
     )
 
     runtime = build_runtime(settings)

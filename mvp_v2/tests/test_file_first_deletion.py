@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from mvp_v2.adapters.filesystem.media import FilesystemMediaDeleter
-from mvp_v2.application.dto.deletion import DeletionCommand, GraphNodeRef
-from mvp_v2.application.graph_snapshot_operations.deletion import preview_deletion
-from mvp_v2.bootstrap.ui import UiRuntimeConfig
-from mvp_v2.ports.media import MediaDeletionError, MediaDeletionTarget
-from mvp_v2.presentation.controller import confirm_file_deletion
 from tests.factories import build_valid_snapshot
+from vue_rag.adapters.filesystem.media import FilesystemMediaDeleter
+from vue_rag.application.dto.deletion import DeletionCommand, GraphNodeRef
+from vue_rag.application.graph_snapshot_operations.deletion import preview_deletion
+from vue_rag.bootstrap.ui import UiRuntimeConfig
+from vue_rag.ports.media import MediaDeletionError, MediaDeletionTarget
+from vue_rag.streamlit_ui.controller import confirm_file_deletion
 
 
 def _document_command() -> DeletionCommand:

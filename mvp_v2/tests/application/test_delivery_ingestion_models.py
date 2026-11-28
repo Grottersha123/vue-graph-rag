@@ -9,22 +9,22 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from mvp_v2.adapters.filesystem.runtime_store import (
+from vue_rag.adapters.filesystem.runtime_store import (
     ConfinedRuntimeFileStore,
     FileStoreError,
 )
-from mvp_v2.adapters.ingestion import LocalInputExtractor
-from mvp_v2.adapters.ollama import OllamaAdapter
-from mvp_v2.application.graph_snapshot_operations.document_editing import (
+from vue_rag.adapters.ingestion import LocalInputExtractor
+from vue_rag.adapters.ollama import OllamaAdapter
+from vue_rag.application.graph_snapshot_operations.document_editing import (
     DocumentMetadataUpdate,
     update_document_metadata,
 )
-from mvp_v2.application.graph_snapshot_operations.ingestion import (
+from vue_rag.application.graph_snapshot_operations.ingestion import (
     IngestionError,
     IngestionService,
     _markdown_h1,
 )
-from mvp_v2.application.ingestion_contracts import (
+from vue_rag.application.ingestion_contracts import (
     EmbeddingRequest,
     ExtractedAsset,
     ExtractedInput,
@@ -33,15 +33,15 @@ from mvp_v2.application.ingestion_contracts import (
     ModelIdentity,
     SourceKind,
 )
-from mvp_v2.application.rag.preparation.chunking import ChunkPolicy, split_text
-from mvp_v2.application.rag.preparation.model_operations import (
+from vue_rag.application.rag.preparation.chunking import ChunkPolicy, split_text
+from vue_rag.application.rag.preparation.model_operations import (
     ModelOperationError,
     build_embeddings,
     describe_asset,
 )
-from mvp_v2.domain import graph, invariants
-from mvp_v2.domain.schema_registry import NODE_SPECS, PropertySpec, ScalarType
-from mvp_v2.domain.snapshot import GraphSnapshot
+from vue_rag.domain import graph, invariants
+from vue_rag.domain.schema_registry import NODE_SPECS, PropertySpec, ScalarType
+from vue_rag.domain.snapshot import GraphSnapshot
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -222,6 +222,34 @@ def test_local_path_generates_identity_and_reuses_document(
     assert second.documents[0].custom_properties == (
         graph.CustomProperty(name="review_note", value="keep"),
     )
+
+
+def test_faq_reingestion_promotes_empty_knowledge_kind() -> None:
+    service = IngestionService(
+        Extractor(ExtractedInput(content=b"content", text="content", extension=".md")),
+        Store(),
+    )
+    faq_request = request().model_copy(update={"external_id": "faq:guide-1"})
+    first_preview = service.preview(base_snapshot(), faq_request)
+    first = service.commit(base_snapshot(), first_preview, created_at=NOW).snapshot
+    document = first.documents[0].model_copy(
+        update={
+            "custom_properties": (
+                graph.CustomProperty(name="knowledge_kind", value=""),
+                graph.CustomProperty(name="review_status", value=""),
+                graph.CustomProperty(name="reusable_as_policy", value=False),
+            )
+        }
+    )
+    with_defaults = first.model_copy(update={"documents": (document,)})
+
+    second_preview = service.preview(with_defaults, faq_request)
+    second = service.commit(with_defaults, second_preview, created_at=NOW).snapshot
+
+    properties = {
+        item.name: item.value for item in second.documents[0].custom_properties
+    }
+    assert properties["knowledge_kind"] == "curated_faq"
 
 
 def test_markdown_title_uses_h1_then_filename() -> None:

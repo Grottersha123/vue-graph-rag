@@ -5,16 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from mvp_v2.adapters.filesystem.media import FilesystemMediaResolver
-from mvp_v2.application.rag.preparation.chunk_backfill import (
+from tests.factories import build_valid_snapshot
+from vue_rag.adapters.filesystem.media import FilesystemMediaResolver
+from vue_rag.application.rag.preparation.chunk_backfill import (
     ChunkBackfillError,
     build_missing_chunks,
     chunk_mutation_impact,
     delete_all_chunks_and_embeddings,
     regenerate_all_chunks,
 )
-from mvp_v2.domain.snapshot import GraphSnapshot
-from tests.factories import build_valid_snapshot
+from vue_rag.domain.snapshot import GraphSnapshot
 
 
 def _snapshot_without_chunks(content: bytes) -> GraphSnapshot:
