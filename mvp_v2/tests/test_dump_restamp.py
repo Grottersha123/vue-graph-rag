@@ -5,25 +5,25 @@ import io
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mvp_v2.adapters.csv.snapshot import write_snapshot
-from mvp_v2.adapters.ladybug import load_verified_dump
-from mvp_v2.application.dump_lifecycle.dump_restamp import (
+from tests.factories import build_valid_snapshot
+from vue_rag.adapters.csv.snapshot import write_snapshot
+from vue_rag.adapters.ladybug import load_verified_dump
+from vue_rag.application.dump_lifecycle.dump_restamp import (
     RestampError,
     apply_dump_restamp,
     plan_dump_restamp,
 )
-from mvp_v2.application.dump_lifecycle.manifests import (
+from vue_rag.application.dump_lifecycle.manifests import (
     DUMP_FORMAT,
     DumpManifest,
     compute_dump_run_id,
 )
-from mvp_v2.application.json_encoding import canonical_json_bytes
-from mvp_v2.domain.schema_registry import (
+from vue_rag.application.json_encoding import canonical_json_bytes
+from vue_rag.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     RELATION_SPECS,
     SCHEMA_PROFILE_SHA256,
 )
-from tests.factories import build_valid_snapshot
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
 

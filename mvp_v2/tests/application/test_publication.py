@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from mvp_v2.adapters.filesystem.dumps import FilesystemDumpRepository
-from mvp_v2.application.dump_lifecycle.publication import (
+from tests.factories import build_valid_snapshot
+from vue_rag.adapters.filesystem.dumps import FilesystemDumpRepository
+from vue_rag.application.dump_lifecycle.publication import (
     SnapshotPublicationError,
     SnapshotPublicationService,
 )
-from mvp_v2.ports.media import MediaVerification
-from tests.factories import build_valid_snapshot
+from vue_rag.ports.media import MediaVerification
 
 
 class Resolver:

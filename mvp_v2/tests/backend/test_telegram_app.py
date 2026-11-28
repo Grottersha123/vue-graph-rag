@@ -8,10 +8,10 @@ from typing import cast
 
 from aiogram.types import Message
 
-from mvp_v2.backend.audit import TelegramAudit
-from mvp_v2.telegram_bot.app import TelegramController
-from mvp_v2.telegram_bot.client import HttpBackendClient
-from mvp_v2.telegram_bot.state import RedisFeedbackState
+from vue_rag.backend.audit import TelegramAudit
+from vue_rag.telegram_bot.app import TelegramController
+from vue_rag.telegram_bot.client import HttpBackendClient
+from vue_rag.telegram_bot.state import RedisFeedbackState
 
 
 class FailingBackend:
@@ -63,7 +63,8 @@ def test_start_returns_help_without_backend_or_feedback_calls(tmp_path: Path) ->
         await controller(tmp_path, frozenset({42})).start(cast(Message, message))
 
         assert message.answers == [
-            "Отправьте текстовый вопрос. Используйте /profiles, чтобы выбрать профиль."
+            "Здравствуйте! Отправьте текстовый вопрос. "
+            "Используйте /profiles, чтобы выбрать профиль."
         ]
         assert actions(tmp_path) == ("start_received", "start_sent")
 

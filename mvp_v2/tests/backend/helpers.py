@@ -4,23 +4,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mvp_v2.application.dto.chat import ChatAnswer, ChatRequest
-from mvp_v2.application.dto.retrieval import (
+from vue_rag.application.dto.chat import ChatAnswer, ChatRequest
+from vue_rag.application.dto.retrieval import (
     EmbeddingSpaceIdentity,
     Evidence,
     SubjectKind,
     SubjectRef,
 )
-from mvp_v2.application.dump_lifecycle.manifests import (
+from vue_rag.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DatabaseManifest,
     TableCount,
     compute_database_build_id,
 )
-from mvp_v2.backend.audit import GatewayAudit
-from mvp_v2.backend.profiles import ProfileRegistry
-from mvp_v2.backend.service import CapacityLimiter, GatewayChatService, NullTraceBinder
-from mvp_v2.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
+from vue_rag.backend.audit import GatewayAudit
+from vue_rag.backend.profiles import ProfileRegistry
+from vue_rag.backend.service import CapacityLimiter, GatewayChatService, NullTraceBinder
+from vue_rag.domain.schema_registry import GRAPH_SCHEMA_VERSION, TABLE_NAMES
 
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
 SPACE = EmbeddingSpaceIdentity(
@@ -61,6 +61,9 @@ def evidence() -> Evidence:
         context_scope="full_document",
         document_id="document",
         document_title="Document",
+        external_id="doc:document",
+        knowledge_kind="official_documentation",
+        source_kind="documentation",
         source_url="https://example.test/document",
         version_id="version",
         version=1,
@@ -87,6 +90,7 @@ class FakeChat:
             citations=(),
             evidence=(evidence(),),
             generated=True,
+            provider="test",
         )
 
 
@@ -110,7 +114,7 @@ class ReadyProbe:
         self.ready = ready
 
     def check(self):  # type: ignore[no-untyped-def]
-        from mvp_v2.backend.contracts import HealthHttpResponse
+        from vue_rag.backend.contracts import HealthHttpResponse
 
         return HealthHttpResponse(
             status="ready" if self.ready else "not_ready",

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mvp_v2.adapters.ladybug import LadybugCapabilityError, LadybugEvidenceHydrator
-from mvp_v2.application.dto.retrieval import (
+from tests.backend.helpers import manifest
+from vue_rag.adapters.ladybug import LadybugCapabilityError, LadybugEvidenceHydrator
+from vue_rag.application.dto.retrieval import (
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
     Evidence,
@@ -13,10 +14,9 @@ from mvp_v2.application.dto.retrieval import (
     VectorHit,
     VectorQuery,
 )
-from mvp_v2.application.dump_lifecycle.manifests import DatabaseManifest
-from mvp_v2.application.ingestion_contracts import ModelAuthorization
-from mvp_v2.application.rag.retrieval.retrieval import SearchService
-from tests.backend.helpers import manifest
+from vue_rag.application.dump_lifecycle.manifests import DatabaseManifest
+from vue_rag.application.ingestion_contracts import ModelAuthorization
+from vue_rag.application.rag.retrieval.retrieval import SearchService
 
 SPACE = EmbeddingSpaceIdentity(
     provider="ollama", model="embed", model_version="v1", dimension=2
@@ -61,6 +61,9 @@ class _Connection:
                         "Title",
                         "https://example.test/a",
                         self.active,
+                        "doc:document",
+                        "official_documentation",
+                        True,
                     ]
                 ]
             )
@@ -78,6 +81,9 @@ class _Connection:
                         "Title",
                         "https://example.test/a",
                         self.active,
+                        "doc:document",
+                        "official_documentation",
+                        True,
                     ]
                 ]
             )

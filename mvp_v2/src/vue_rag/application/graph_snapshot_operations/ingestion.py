@@ -321,19 +321,11 @@ class IngestionService:
             (item for item in snapshot.documents if item.id == preview.document_id),
             None,
         )
-        custom_properties = tuple(request.custom_properties)
-        property_names = {item.name for item in custom_properties}
-        if (
-            request.external_id.startswith("faq:")
-            and "knowledge_kind" not in property_names
-        ):
-            custom_properties = (
-                *custom_properties,
-                graph.CustomProperty(
-                    name="knowledge_kind",
-                    value="curated_faq",
-                ),
-            )
+        custom_properties = _merge_custom_properties(
+            existing_document,
+            tuple(request.custom_properties),
+            request.external_id,
+        )
         document_fields = {
             "id": preview.document_id,
             "title": request.title,
@@ -427,6 +419,32 @@ class IngestionService:
                 ),
             }
         )
+
+
+def _merge_custom_properties(
+    existing_document: graph.Document | None,
+    requested: tuple[graph.CustomProperty, ...],
+    external_id: str,
+) -> tuple[graph.CustomProperty, ...]:
+    requested_names = tuple(item.name for item in requested)
+    if len(requested_names) != len(set(requested_names)):
+        raise IngestionError("custom property names must be unique")
+    merged = {
+        item.name: item
+        for item in (
+            () if existing_document is None else existing_document.custom_properties
+        )
+    }
+    merged.update((item.name, item) for item in requested)
+    knowledge_kind = merged.get("knowledge_kind")
+    if external_id.startswith("faq:") and (
+        knowledge_kind is None or knowledge_kind.value == ""
+    ):
+        merged["knowledge_kind"] = graph.CustomProperty(
+            name="knowledge_kind",
+            value="curated_faq",
+        )
+    return tuple(merged.values())
 
 
 def _replace_optional_relation(

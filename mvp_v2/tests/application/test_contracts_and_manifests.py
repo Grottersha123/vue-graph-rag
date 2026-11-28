@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from mvp_v2.application.dto.deletion import (
+from vue_rag.application.dto.deletion import (
     DatabaseIdentity,
     DeletionCommand,
     DeletionImpact,
@@ -13,7 +13,7 @@ from mvp_v2.application.dto.deletion import (
     GraphNodeRef,
     GraphRelationRef,
 )
-from mvp_v2.application.dto.retrieval import (
+from vue_rag.application.dto.retrieval import (
     EmbeddingBuildRequest,
     EmbeddingPurpose,
     EmbeddingSpaceIdentity,
@@ -21,7 +21,7 @@ from mvp_v2.application.dto.retrieval import (
     SubjectRef,
     VectorQuery,
 )
-from mvp_v2.application.dump_lifecycle.manifests import (
+from vue_rag.application.dump_lifecycle.manifests import (
     DATABASE_FORMAT,
     DUMP_FORMAT,
     DatabaseManifest,
@@ -31,7 +31,7 @@ from mvp_v2.application.dump_lifecycle.manifests import (
     compute_database_build_id,
     compute_dump_run_id,
 )
-from mvp_v2.domain.schema_registry import (
+from vue_rag.domain.schema_registry import (
     GRAPH_SCHEMA_VERSION,
     SCHEMA_PROFILE_SHA256,
     TABLE_NAMES,

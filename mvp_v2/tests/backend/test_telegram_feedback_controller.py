@@ -8,11 +8,11 @@ from typing import cast
 import httpx
 from aiogram.types import CallbackQuery
 
-from mvp_v2.backend.audit import TelegramAudit
-from mvp_v2.telegram_bot.audit import TelegramEventRecorder
-from mvp_v2.telegram_bot.client import HttpBackendClient
-from mvp_v2.telegram_bot.feedback import TelegramFeedbackController
-from mvp_v2.telegram_bot.state import PendingFeedback, RedisFeedbackState
+from vue_rag.backend.audit import TelegramAudit
+from vue_rag.telegram_bot.audit import TelegramEventRecorder
+from vue_rag.telegram_bot.client import HttpBackendClient
+from vue_rag.telegram_bot.feedback import TelegramFeedbackController
+from vue_rag.telegram_bot.state import PendingFeedback, RedisFeedbackState
 
 
 class MemoryFeedbackState:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mvp_v2.telegram_bot.state import PendingFeedback, RedisFeedbackState
+from vue_rag.telegram_bot.state import PendingFeedback, RedisFeedbackState
 
 
 class MemoryRedis:
